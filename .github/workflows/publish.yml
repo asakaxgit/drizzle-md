@@ -1,0 +1,39 @@
+name: Publish
+
+# Runs only when a GitHub release is published. Nothing is published from pull requests or pushes.
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: npm
+          registry-url: 'https://registry.npmjs.org'
+
+      - run: npm install -g npm@latest
+
+      - run: npm ci
+      - run: npx biome ci .
+      - run: npm run typecheck
+      - run: npm test
+
+      - name: Check tag matches package version
+        run: |
+          pkg="$(node -p 'require("./package.json").version')"
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$pkg" != "$tag" ]; then
+            echo "package.json is $pkg but the release tag is $tag" >&2
+            exit 1
+          fi
+
+      - run: npm publish --access public
