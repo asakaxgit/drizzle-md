@@ -8,6 +8,8 @@ export default defineConfig({
   clean: true,
   splitting: false,
   treeshake: true,
+  // Keep `node:` in imports: `node:sqlite` only exists with the prefix.
+  removeNodeProtocol: false,
   outExtension({ format }) {
     return { js: format === 'cjs' ? '.cjs' : '.js' };
   },
