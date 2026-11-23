@@ -54,7 +54,8 @@ All work is synchronous inside one event-loop turn, so toggling `query_only` can
 
 PGlite runs Postgres 18 in WebAssembly in the same process. It is an optional peer dependency, loaded only by `drizzle-md/pg`, so the default entry point never pulls it in.
 
-- **Startup.** `PGlite.create()` with the `@electric-sql/pglite-prepopulatedfs` snapshot when it is installed (about 0.45 s instead of about 1.4 s for initdb). Then `CREATE TYPE` for enums, `CREATE TABLE` per model, the user's `setup` SQL, and the `md_reader` role with `SELECT` on every table in `public`.
+- **One name, two imports.** `drizzle-md` and `drizzle-md/pg` both export `drizzleMd` with the same options and result shape; the import path picks the engine, as Drizzle's own `drizzle()` does per driver.
+- **Startup.** `PGlite.create()` with the `@electric-sql/pglite-prepopulatedfs` snapshot when it is installed (about 0.45 s instead of about 1.4 s for initdb). The snapshot is a data directory made by one exact PGlite build, so drizzle-md reads both installed `package.json` versions first and uses it only when they are equal. By default a mismatch or a failed load falls back to initdb and reports a `startup-warning` through `onDiagnostic`; `prepopulated: true` turns both into a `CONFIG` error, and `false` skips the snapshot. Then `CREATE TYPE` for enums, `CREATE TABLE` per model, the user's `setup` SQL, and the `md_reader` role with `SELECT` on every table in `public`.
 - **Loading.** The first load of a folder is one transaction: `DELETE … WHERE key = ANY($1)` followed by one `COPY … FROM '/dev/blob'` in text format (5,000 rows in about 92 ms in the benchmark). Single-file updates from the watcher use a parameterised `INSERT`. Values come from each column's own `mapToDriverValue`, so `text[]` gets Postgres array literals and `jsonb` gets JSON text. SQL defaults are evaluated as `select (<default>)::text`, which keeps every type in Postgres' input format.
 - **Querying.** `drizzle-orm/pg-proxy` hands every statement to one callback. PGlite returns timestamps, dates and intervals as text there, as the official `drizzle-orm/pglite` driver does, so Drizzle's own mapping applies.
 - **Live queries.** `md.live(query, onResult)` runs the Drizzle query once through the read-only path, registers its SQL with PGlite's `live` extension (which watches the tables the plan touches), and re-runs the Drizzle query on every change so `onResult` gets typed, mapped rows. `close()` unsubscribes everything first.
@@ -77,6 +78,8 @@ ROLLBACK;                   -- always, even when it succeeded
 4. The rollback discards everything a statement did, including session settings changed with `set_config(…, false)`.
 
 PGlite runs one transaction at a time, so drizzle-md's own writes (as the session user, in their own transaction) never interleave with a user query. All three SQLSTATEs map to the `READ_ONLY` error code.
+
+The `setup` option is deliberately outside all of this: it runs once at startup as the session user with full database rights. It is trusted code, like a migration, and must never contain untrusted or user-supplied input.
 
 #### Trade-offs
 
@@ -148,4 +151,3 @@ Type changes (e.g. text to timestamp) reuse `coerce.ts` to check every value bef
 - Frontmatter keys match Drizzle property names. Should SQL column names (e.g. `author_id`) also be accepted?
 - Should the watcher also watch `root` so table folders created later are picked up?
 - `drizzle-md/pg`: should indexes declared in `pgTable` be created automatically, replacing most uses of `setup`?
-- `drizzle-md/pg`: is loading the prepopulated snapshot whenever it is installed the right default, or should it be opt-in?

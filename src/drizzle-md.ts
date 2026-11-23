@@ -36,6 +36,9 @@ const isSqliteReadOnlyError = <T>(error: T): error is T & Error =>
  * Loads folders of markdown files into an in-memory SQLite database and returns a read-only
  * Drizzle database over them.
  *
+ * For Postgres, import the function of the same name from `drizzle-md/pg` instead: the import
+ * path picks the engine.
+ *
  * @example
  * const md = await drizzleMd({ root: 'content', schema: { posts, authors } });
  * const rows = await md.db.select().from(posts).where(eq(posts.draft, false));

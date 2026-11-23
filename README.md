@@ -181,6 +181,13 @@ Version 1 doesn't write files. Any `insert`, `update`, `delete`, DDL or `PRAGMA`
 
 ## Postgres with PGlite (`drizzle-md/pg`)
 
+**Same function, different import.** Both entry points export `drizzleMd` with the same options and the same result. The import path picks the engine:
+
+```typescript
+import { drizzleMd } from 'drizzle-md'; // SQLite (better-sqlite3 or node:sqlite), sqliteTable schemas
+import { drizzleMd } from 'drizzle-md/pg'; // PGlite (Postgres), pgTable schemas
+```
+
 `drizzle-md/pg` builds the same index in [PGlite](https://pglite.dev), Postgres compiled to WebAssembly, so you can write `pgTable` schemas and use Postgres features: array operators, `jsonb`, full-text search, `pg_trgm` and GIN indexes. The watcher, diagnostics, `report()`, `reload()`, `subscribe()`, `settled()` and `close()` behave exactly as in the SQLite entry point.
 
 ```bash
@@ -229,9 +236,9 @@ Options on top of the SQLite ones:
 
 | Option | Meaning |
 | --- | --- |
-| `prepopulated` | Start from the `@electric-sql/pglite-prepopulatedfs` snapshot instead of running initdb (about 0.5 s instead of 1.4 s). Default: use it when it is installed. `true` requires it, `false` skips it. Its version must match `@electric-sql/pglite`. |
+| `prepopulated` | Start from the `@electric-sql/pglite-prepopulatedfs` snapshot instead of running initdb (about 0.5 s instead of 1.4 s). Default: use it when it is installed **and** its version is exactly the installed `@electric-sql/pglite` version; on a mismatch or a failed load PGlite starts normally and `onDiagnostic` gets a `startup-warning`. `true` requires it (a missing package, a mismatch or a failed load is a `CONFIG` error). `false` skips it. |
 | `pglite` | Extra PGlite options, such as `extensions: { pg_trgm }` or `debug`. The data directory is always in memory. |
-| `setup` | SQL run once as the database owner after the tables are created and before the files load, e.g. `CREATE EXTENSION pg_trgm; CREATE INDEX ON posts USING gin (tags)`. |
+| `setup` | SQL run once as the database owner after the tables are created and before the files load, e.g. `CREATE EXTENSION pg_trgm; CREATE INDEX ON posts USING gin (tags)`. Trusted code only, see below. |
 
 ```typescript
 import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
@@ -244,6 +251,8 @@ const md = await drizzleMd({
     CREATE INDEX posts_title_trgm ON posts USING gin (title gin_trgm_ops);`,
 });
 ```
+
+> **`setup` is trusted startup code.** It runs with full database rights, outside the read-only guard below. Treat it like a migration you wrote yourself: never build it from user input, request data, markdown file contents or anything else untrusted.
 
 **Read-only.** Every statement from `md.db` runs in its own `READ ONLY` transaction, as a select-only `md_reader` role, and is always rolled back. Writes, DDL, `DO` blocks, `SET` and writes hidden in `WITH` are rejected with the same `READ_ONLY` error code as the SQLite entry point. `md.live()` first runs the query through that read-only path before PGlite's live extension sees it.
 
