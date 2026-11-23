@@ -44,6 +44,7 @@
   },
   "scripts": {
     "build": "tsup",
+    "check:dist": "node scripts/check-dist.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "biome ci .",
     "format": "biome check --write .",

@@ -9,6 +9,7 @@ npm run format     # apply Biome fixes and formatting
 npm run typecheck
 npm test           # vitest with coverage thresholds
 npm run build
+npm run check:dist # checks the built bundles, e.g. the node:sqlite import
 ```
 
 Commits need a DCO sign-off (`git commit -s`) and an English message in the
