@@ -1,11 +1,10 @@
 import { createHash } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
-import { buildRow, type SqlEvaluator } from './coerce.js';
-import type { Engine, SqlParam } from './engine.js';
+import { buildRow, type RowContext, type RowValues } from './coerce.js';
 import type { Diagnostic } from './errors.js';
 import { parseMarkdown } from './frontmatter.js';
-import { quoteIdentifier, type TableModel } from './schema.js';
+import type { TableModel } from './schema.js';
 
 export type ChangeType = 'add' | 'change' | 'unlink' | 'invalid';
 
@@ -32,37 +31,76 @@ export interface TableReport {
   readonly unknownKeys: Readonly<Record<string, number>>;
 }
 
-interface FileEntry {
+interface FileEntry<TParam> {
   readonly checksum: string;
-  /** Key bound in SQLite, or undefined when the file is invalid and has no row. */
-  readonly key: SqlParam | undefined;
+  /** Key bound in the index, or undefined when the file is invalid and has no row. */
+  readonly key: TParam | undefined;
   readonly diagnostics: readonly Diagnostic[];
   readonly unknownKeys: readonly string[];
 }
 
-export interface TableState {
+export interface TableState<TParam> {
   readonly model: TableModel;
   readonly absoluteDir: string;
-  readonly files: Map<string, FileEntry>;
+  readonly files: Map<string, FileEntry<TParam>>;
 }
 
-export interface StoreOptions {
-  readonly engine: Engine;
+/** Row changes for one table: delete these keys, then insert these rows. */
+export interface TableChanges<TParam> {
+  readonly deleteKeys: readonly TParam[];
+  readonly rows: readonly RowValues<TParam>[];
+}
+
+/** The index database behind a store: SQLite or PGlite. */
+export interface IndexBackend<TParam> extends RowContext<TParam> {
+  /**
+   * Applies `changes` to one table atomically. When it rejects, nothing changed; the store then
+   * retries file by file to find the one that failed.
+   */
+  readonly apply: (model: TableModel, changes: TableChanges<TParam>) => Promise<void>;
+}
+
+export interface StoreOptions<TParam> {
+  readonly backend: IndexBackend<TParam>;
   readonly models: readonly TableModel[];
   readonly root: string;
   readonly extensions: readonly string[];
-  readonly evaluate: SqlEvaluator;
   readonly onDiagnostic: (diagnostic: Diagnostic) => void;
 }
 
-export interface Store {
-  readonly tables: readonly TableState[];
+export interface Store<TParam> {
+  readonly tables: readonly TableState<TParam>[];
   readonly isRowFile: (fileName: string) => boolean;
-  readonly syncFile: (state: TableState, fileName: string) => Promise<ChangeEvent | undefined>;
-  readonly syncTable: (state: TableState) => Promise<ChangeEvent[]>;
+  readonly syncFile: (
+    state: TableState<TParam>,
+    fileName: string,
+  ) => Promise<ChangeEvent | undefined>;
+  readonly syncTable: (state: TableState<TParam>) => Promise<ChangeEvent[]>;
   readonly syncAll: () => Promise<ChangeEvent[]>;
   readonly diagnostics: () => Diagnostic[];
   readonly report: () => TableReport[];
+}
+
+/** What reading one file decided. Nothing is applied until `commit`. */
+type FilePlan<TParam> =
+  | { readonly kind: 'unchanged' }
+  | { readonly kind: 'remove' }
+  | {
+      readonly kind: 'invalid';
+      readonly checksum: string;
+      readonly diagnostics: readonly Diagnostic[];
+      readonly unknownKeys: readonly string[];
+    }
+  | {
+      readonly kind: 'row';
+      readonly checksum: string;
+      readonly row: RowValues<TParam>;
+      readonly unknownKeys: readonly string[];
+    };
+
+interface PlannedFile<TParam> {
+  readonly fileName: string;
+  readonly plan: FilePlan<TParam>;
 }
 
 const TEMP_SUFFIXES = ['~', '.swp', '.swx', '.tmp', '.bak'];
@@ -75,12 +113,12 @@ const errorCode = <T>(error: T): string | undefined =>
 const errorMessage = <T>(error: T): string =>
   error instanceof Error ? error.message : String(error);
 
-export const createStore = (options: StoreOptions): Store => {
-  const { engine, evaluate, onDiagnostic } = options;
+export const createStore = <TParam>(options: StoreOptions<TParam>): Store<TParam> => {
+  const { backend, onDiagnostic } = options;
   const extensions = options.extensions.map((extension) => extension.toLowerCase());
 
   const tables = options.models.map(
-    (model): TableState => ({
+    (model): TableState<TParam> => ({
       model,
       absoluteDir: join(options.root, model.dir),
       files: new Map(),
@@ -103,34 +141,12 @@ export const createStore = (options: StoreOptions): Store => {
     return fileName.slice(0, fileName.length - extension.length);
   };
 
-  const relativePath = (state: TableState, fileName: string): string =>
+  const relativePath = (state: TableState<TParam>, fileName: string): string =>
     relative(options.root, join(state.absoluteDir, fileName)).split(sep).join('/');
-
-  const writing = <T>(task: () => T): T => {
-    engine.exec('PRAGMA query_only = OFF');
-    engine.exec('BEGIN');
-    try {
-      const result = task();
-      engine.exec('COMMIT');
-      return result;
-    } catch (error) {
-      engine.exec('ROLLBACK');
-      throw error;
-    } finally {
-      engine.exec('PRAGMA query_only = ON');
-    }
-  };
-
-  const deleteSql = (model: TableModel) =>
-    `DELETE FROM ${quoteIdentifier(model.name)} WHERE ${quoteIdentifier(model.keyColumn.name)} = ?`;
-
-  const deleteRow = (model: TableModel, key: SqlParam) => {
-    writing(() => engine.run(deleteSql(model), [key]));
-  };
 
   const event = (
     type: ChangeEvent['type'],
-    state: TableState,
+    state: TableState<TParam>,
     fileName: string,
     diagnostics: readonly Diagnostic[] = [],
   ): ChangeEvent => ({
@@ -141,104 +157,174 @@ export const createStore = (options: StoreOptions): Store => {
     diagnostics,
   });
 
-  const removeFile = (state: TableState, fileName: string): ChangeEvent | undefined => {
-    const previous = state.files.get(fileName);
-    if (previous === undefined) {
-      return undefined;
-    }
-    if (previous.key !== undefined) {
-      deleteRow(state.model, previous.key);
-    }
-    state.files.delete(fileName);
-    return event('unlink', state, fileName);
-  };
-
-  const markInvalid = (
-    state: TableState,
+  const planFile = async (
+    state: TableState<TParam>,
     fileName: string,
-    checksum: string,
-    diagnostics: readonly Diagnostic[],
-    unknownKeys: readonly string[] = [],
-  ): ChangeEvent => {
-    const previous = state.files.get(fileName);
-    if (previous?.key !== undefined) {
-      deleteRow(state.model, previous.key);
-    }
-    state.files.set(fileName, { checksum, key: undefined, diagnostics, unknownKeys });
-    for (const diagnostic of diagnostics) {
-      onDiagnostic(diagnostic);
-    }
-    return event('invalid', state, fileName, diagnostics);
-  };
-
-  const syncFile = async (
-    state: TableState,
-    fileName: string,
-  ): Promise<ChangeEvent | undefined> => {
+  ): Promise<FilePlan<TParam>> => {
     if (!isRowFile(fileName)) {
-      return undefined;
+      return { kind: 'unchanged' };
     }
     const file = relativePath(state, fileName);
-    const diagnostic = (code: Diagnostic['code'], message: string): Diagnostic => ({
-      code,
-      table: state.model.schemaKey,
-      file,
-      message,
-    });
+    const invalid = (
+      checksum: string,
+      diagnostics: readonly Diagnostic[],
+      unknownKeys: readonly string[] = [],
+    ): FilePlan<TParam> => ({ kind: 'invalid', checksum, diagnostics, unknownKeys });
     let source: string;
     try {
       source = await readFile(join(state.absoluteDir, fileName), 'utf8');
     } catch (error) {
       const code = errorCode(error);
       if (code === 'ENOENT' || code === 'ENOTDIR') {
-        return removeFile(state, fileName);
+        return { kind: 'remove' };
       }
       if (code === 'EISDIR') {
-        return undefined;
+        return { kind: 'unchanged' };
       }
-      return markInvalid(state, fileName, '', [diagnostic('read-error', errorMessage(error))]);
+      return invalid('', [
+        { code: 'read-error', table: state.model.schemaKey, file, message: errorMessage(error) },
+      ]);
     }
     const checksum = createHash('sha256').update(source).digest('hex');
-    const previous = state.files.get(fileName);
-    if (previous?.checksum === checksum) {
-      return undefined;
+    if (state.files.get(fileName)?.checksum === checksum) {
+      return { kind: 'unchanged' };
     }
     const parsed = parseMarkdown(source);
     if (!parsed.ok) {
-      return markInvalid(state, fileName, checksum, [
-        diagnostic('invalid-frontmatter', parsed.message),
+      return invalid(checksum, [
+        {
+          code: 'invalid-frontmatter',
+          table: state.model.schemaKey,
+          file,
+          message: parsed.message,
+        },
       ]);
     }
-    const outcome = buildRow(state.model, parsed.file, stemOf(fileName), file, evaluate);
+    const outcome = await buildRow(state.model, parsed.file, stemOf(fileName), file, backend);
     if (!outcome.ok) {
-      return markInvalid(state, fileName, checksum, outcome.diagnostics, outcome.unknownKeys);
+      return invalid(checksum, outcome.diagnostics, outcome.unknownKeys);
     }
-    const { model } = state;
-    const { row } = outcome;
-    const insertSql = `INSERT INTO ${quoteIdentifier(model.name)} (${row.columns
-      .map(quoteIdentifier)
-      .join(', ')}) VALUES (${row.columns.map(() => '?').join(', ')})`;
-    try {
-      writing(() => {
-        if (previous?.key !== undefined) {
-          engine.run(deleteSql(model), [previous.key]);
-        }
-        engine.run(deleteSql(model), [row.key]);
-        engine.run(insertSql, row.params);
-      });
-    } catch (error) {
-      return markInvalid(state, fileName, checksum, [diagnostic('sql-error', errorMessage(error))]);
-    }
-    state.files.set(fileName, {
-      checksum,
-      key: row.key,
-      diagnostics: [],
-      unknownKeys: outcome.unknownKeys,
-    });
-    return event(previous?.key === undefined ? 'add' : 'change', state, fileName);
+    return { kind: 'row', checksum, row: outcome.row, unknownKeys: outcome.unknownKeys };
   };
 
-  const listFiles = async (state: TableState): Promise<string[]> => {
+  /** Updates the file state after its change was applied and returns the event. */
+  const record = (
+    state: TableState<TParam>,
+    item: PlannedFile<TParam>,
+  ): ChangeEvent | undefined => {
+    const { fileName, plan } = item;
+    const entries = state.files;
+    const previous = entries.get(fileName);
+    switch (plan.kind) {
+      case 'unchanged':
+        return undefined;
+      case 'remove':
+        if (previous === undefined) {
+          return undefined;
+        }
+        entries.delete(fileName);
+        return event('unlink', state, fileName);
+      case 'invalid':
+        entries.set(fileName, {
+          checksum: plan.checksum,
+          key: undefined,
+          diagnostics: plan.diagnostics,
+          unknownKeys: plan.unknownKeys,
+        });
+        for (const diagnostic of plan.diagnostics) {
+          onDiagnostic(diagnostic);
+        }
+        return event('invalid', state, fileName, plan.diagnostics);
+      case 'row':
+        entries.set(fileName, {
+          checksum: plan.checksum,
+          key: plan.row.key,
+          diagnostics: [],
+          unknownKeys: plan.unknownKeys,
+        });
+        return event(previous?.key === undefined ? 'add' : 'change', state, fileName);
+    }
+  };
+
+  const changesFor = (
+    state: TableState<TParam>,
+    items: readonly PlannedFile<TParam>[],
+  ): TableChanges<TParam> => {
+    const entries = state.files;
+    const deleteKeys: TParam[] = [];
+    const rows: RowValues<TParam>[] = [];
+    for (const { fileName, plan } of items) {
+      const previousKey = entries.get(fileName)?.key;
+      if (previousKey !== undefined) {
+        deleteKeys.push(previousKey);
+      }
+      if (plan.kind === 'row') {
+        deleteKeys.push(plan.row.key);
+        rows.push(plan.row);
+      }
+    }
+    return { deleteKeys, rows };
+  };
+
+  /**
+   * Applies planned files for one table in one batch. When the batch fails, each file is applied
+   * on its own, and a file whose row the database rejects is reported as a `sql-error`.
+   */
+  const commit = async (
+    state: TableState<TParam>,
+    planned: readonly PlannedFile<TParam>[],
+  ): Promise<ChangeEvent[]> => {
+    const items = planned.filter((item) => item.plan.kind !== 'unchanged');
+    const changes = changesFor(state, items);
+    try {
+      if (changes.deleteKeys.length > 0 || changes.rows.length > 0) {
+        await backend.apply(state.model, changes);
+      }
+    } catch (error) {
+      const [only] = items;
+      if (items.length > 1) {
+        const events: ChangeEvent[] = [];
+        for (const item of items) {
+          events.push(...(await commit(state, [item])));
+        }
+        return events;
+      }
+      if (only === undefined || only.plan.kind !== 'row') {
+        throw error;
+      }
+      const sqlError: PlannedFile<TParam> = {
+        fileName: only.fileName,
+        plan: {
+          kind: 'invalid',
+          checksum: only.plan.checksum,
+          diagnostics: [
+            {
+              code: 'sql-error',
+              table: state.model.schemaKey,
+              file: relativePath(state, only.fileName),
+              message: errorMessage(error),
+            },
+          ],
+          unknownKeys: [],
+        },
+      };
+      return commit(state, [sqlError]);
+    }
+    return items.flatMap((item) => {
+      const recorded = record(state, item);
+      return recorded === undefined ? [] : [recorded];
+    });
+  };
+
+  const syncFile = async (
+    state: TableState<TParam>,
+    fileName: string,
+  ): Promise<ChangeEvent | undefined> => {
+    const [changed] = await commit(state, [{ fileName, plan: await planFile(state, fileName) }]);
+    return changed;
+  };
+
+  const listFiles = async (state: TableState<TParam>): Promise<string[]> => {
     try {
       const entries = await readdir(state.absoluteDir, { withFileTypes: true });
       return entries
@@ -253,24 +339,15 @@ export const createStore = (options: StoreOptions): Store => {
     }
   };
 
-  const syncTable = async (state: TableState): Promise<ChangeEvent[]> => {
+  const syncTable = async (state: TableState<TParam>): Promise<ChangeEvent[]> => {
     const present = await listFiles(state);
-    const events: ChangeEvent[] = [];
-    for (const fileName of [...state.files.keys()]) {
-      if (!present.includes(fileName)) {
-        const removed = removeFile(state, fileName);
-        if (removed !== undefined) {
-          events.push(removed);
-        }
-      }
-    }
+    const planned: PlannedFile<TParam>[] = [...state.files.keys()]
+      .filter((fileName) => !present.includes(fileName))
+      .map((fileName) => ({ fileName, plan: { kind: 'remove' } }));
     for (const fileName of present) {
-      const changed = await syncFile(state, fileName);
-      if (changed !== undefined) {
-        events.push(changed);
-      }
+      planned.push({ fileName, plan: await planFile(state, fileName) });
     }
-    return events;
+    return commit(state, planned);
   };
 
   const syncAll = async (): Promise<ChangeEvent[]> => {

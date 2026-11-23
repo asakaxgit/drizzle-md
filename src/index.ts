@@ -1,3 +1,4 @@
+export type { BaseOptions, DrizzleMdIndex } from './core.js';
 export {
   type ChangeListener,
   type DrizzleMd,

@@ -13,8 +13,8 @@ export interface Watcher {
   readonly close: () => void;
 }
 
-export interface WatcherContext {
-  readonly store: Store;
+export interface WatcherContext<TParam> {
+  readonly store: Store<TParam>;
   readonly enqueue: (task: () => Promise<ChangeEvent[]>) => void;
   readonly onDiagnostic: (diagnostic: Diagnostic) => void;
 }
@@ -26,13 +26,16 @@ const WHOLE_TABLE = Symbol('whole table');
  * re-read; its checksum decides whether anything changed. When the platform does not report a
  * file name, the whole folder is re-scanned.
  */
-export const startWatcher = (context: WatcherContext, options: WatchOptions = {}): Watcher => {
+export const startWatcher = <TParam>(
+  context: WatcherContext<TParam>,
+  options: WatchOptions = {},
+): Watcher => {
   const { store, enqueue, onDiagnostic } = context;
   const debounceMs = options.debounceMs ?? 50;
   const timers = new Map<string, NodeJS.Timeout>();
   const watchers: FSWatcher[] = [];
 
-  const schedule = (state: TableState, fileName: string | typeof WHOLE_TABLE) => {
+  const schedule = (state: TableState<TParam>, fileName: string | typeof WHOLE_TABLE) => {
     const timerKey = `${state.model.schemaKey}\0${typeof fileName === 'string' ? fileName : '*'}`;
     clearTimeout(timers.get(timerKey));
     const timer = setTimeout(() => {

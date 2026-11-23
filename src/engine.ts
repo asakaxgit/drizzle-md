@@ -1,4 +1,9 @@
+import { sql } from 'drizzle-orm';
+import { SQLiteSyncDialect } from 'drizzle-orm/sqlite-core';
+import { toSqlParam } from './coerce.js';
 import { createDrizzleMdError } from './errors.js';
+import { quoteIdentifier } from './schema.js';
+import type { IndexBackend } from './store.js';
 
 /** Values that can be bound to a SQLite statement. */
 export type SqlParam = string | number | bigint | null | Uint8Array;
@@ -79,3 +84,50 @@ const openNodeSqlite = async (): Promise<Engine> => {
 
 export const openEngine = (driver: Driver): Promise<Engine> =>
   driver === 'node:sqlite' ? openNodeSqlite() : openBetterSqlite3();
+
+/** Runs `task` with writes allowed, in one transaction. Queries run with `query_only` on. */
+const writing = (engine: Engine, task: () => void) => {
+  engine.exec('PRAGMA query_only = OFF');
+  engine.exec('BEGIN');
+  try {
+    task();
+    engine.exec('COMMIT');
+  } catch (error) {
+    engine.exec('ROLLBACK');
+    throw error;
+  } finally {
+    engine.exec('PRAGMA query_only = ON');
+  }
+};
+
+/**
+ * The SQLite index behind the default entry point. Every write is synchronous inside one call, so
+ * turning `query_only` off can never interleave with a user query.
+ */
+export const createSqliteBackend = (engine: Engine): IndexBackend<SqlParam> => {
+  const dialect = new SQLiteSyncDialect();
+  return {
+    toParam: toSqlParam,
+    evaluate: async (expression) => {
+      const query = dialect.sqlToQuery(sql`select ${expression}`);
+      return engine.rows(query.sql, query.params.map(toSqlParam))[0]?.[0] ?? null;
+    },
+    apply: async (model, changes) => {
+      const table = quoteIdentifier(model.name);
+      const deleteSql = `DELETE FROM ${table} WHERE ${quoteIdentifier(model.keyColumn.name)} = ?`;
+      writing(engine, () => {
+        for (const key of changes.deleteKeys) {
+          engine.run(deleteSql, [key]);
+        }
+        for (const row of changes.rows) {
+          engine.run(
+            `INSERT INTO ${table} (${row.columns.map(quoteIdentifier).join(', ')}) VALUES (${row.columns
+              .map(() => '?')
+              .join(', ')})`,
+            row.params,
+          );
+        }
+      });
+    },
+  };
+};

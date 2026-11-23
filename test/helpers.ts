@@ -1,7 +1,7 @@
 import { cp, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { ChangeEvent, DrizzleMd } from '../src/index.js';
+import type { ChangeEvent, DrizzleMdIndex } from '../src/index.js';
 
 export const fixture = (name: string): string => join(import.meta.dirname, 'fixtures', name);
 
@@ -15,8 +15,8 @@ export const copyFixture = async (
 };
 
 /** Resolves with the first change event that matches, or rejects after `timeoutMs`. */
-export const nextEvent = <TSchema extends Record<string, object>>(
-  md: DrizzleMd<TSchema>,
+export const nextEvent = (
+  md: DrizzleMdIndex,
   matches: (event: ChangeEvent) => boolean,
   timeoutMs = 5000,
 ): Promise<ChangeEvent> =>
