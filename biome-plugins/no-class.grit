@@ -1,0 +1,9 @@
+language js(typescript)
+
+or {
+  JsClassDeclaration(),
+  JsClassExpression(),
+  JsClassExportDefaultDeclaration()
+} as $class where {
+  register_diagnostic(span=$class, message="Classes are not allowed. Use functions that return plain objects and `type` aliases instead.", severity="error")
+}

@@ -1,0 +1,5 @@
+language js(typescript)
+
+TsUnknownType() as $type where {
+  register_diagnostic(span=$type, message="`unknown` is not allowed. Use a precise type, a generic parameter, or a JSON-like value type with narrowing.", severity="error")
+}
