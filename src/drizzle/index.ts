@@ -3,17 +3,17 @@ export type {
   ChangeListener,
   IndexReport,
   InvalidFileMode,
-  MdqlIndex,
+  SqlmdIndex,
 } from '../core.js';
 export type { Driver } from '../engine.js';
 export {
   type Diagnostic,
   type DiagnosticCode,
-  findMdqlError,
+  findSqlmdError,
   formatDiagnostic,
-  isMdqlError,
-  type MdqlError,
-  type MdqlErrorCode,
+  isSqlmdError,
+  type SqlmdError,
+  type SqlmdErrorCode,
 } from '../errors.js';
 export { type MarkdownFile, parseMarkdown } from '../frontmatter.js';
 export type { JsonArray, JsonObject, JsonPrimitive, JsonValue } from '../json.js';

@@ -4,9 +4,9 @@ import {
   type SqliteRemoteDatabase,
 } from 'drizzle-orm/sqlite-proxy';
 import { toSqlParam } from '../coerce.js';
-import { type BaseOptions, type MdqlIndex, openIndex } from '../core.js';
+import { type BaseOptions, openIndex, type SqlmdIndex } from '../core.js';
 import { createSqliteBackend, type Driver, openEngine, type SqlRow } from '../engine.js';
-import { findMdqlError } from '../errors.js';
+import { findSqlmdError } from '../errors.js';
 import { closedError, READ_STATEMENT, readOnlyError } from '../read-only.js';
 import { buildModels, sqliteDialect, type TablesOptions } from './schema.js';
 
@@ -24,7 +24,7 @@ export interface DrizzleMdOptions<TSchema extends Record<string, object>> extend
   readonly driver?: Driver;
 }
 
-export interface DrizzleMd<TSchema extends Record<string, object>> extends MdqlIndex {
+export interface DrizzleMd<TSchema extends Record<string, object>> extends SqlmdIndex {
   /** A read-only Drizzle database over the markdown files. */
   readonly db: SqliteRemoteDatabase<TSchema>;
 }
@@ -36,11 +36,11 @@ const isSqliteReadOnlyError = <T>(error: T): error is T & Error =>
  * Loads folders of markdown files into an in-memory SQLite database and returns a read-only
  * Drizzle database over them.
  *
- * For Postgres, import the function of the same name from `mdql/pg` instead: the import path
- * picks the engine. For queries without Drizzle, use `mdql` from `mdql`.
+ * For Postgres, import the function of the same name from `sqlmd/pg` instead: the import path
+ * picks the engine. For queries without Drizzle, use `sqlmd` from `sqlmd`.
  *
  * @example
- * import { drizzleMd } from 'mdql/drizzle';
+ * import { drizzleMd } from 'sqlmd/drizzle';
  * const md = await drizzleMd({ root: 'content', schema: { posts, authors } });
  * const rows = await md.db.select().from(posts).where(eq(posts.draft, false));
  */
@@ -79,7 +79,7 @@ export const drizzleMd = async <TSchema extends Record<string, object>>(
     try {
       rows = engine.rows(statement, params.map(toSqlParam));
     } catch (error) {
-      if (isSqliteReadOnlyError(error) && findMdqlError(error) === undefined) {
+      if (isSqliteReadOnlyError(error) && findSqlmdError(error) === undefined) {
         throw readOnlyError(statement, error);
       }
       throw error;

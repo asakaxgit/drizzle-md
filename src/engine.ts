@@ -1,5 +1,5 @@
 import { toSqlParam } from './coerce.js';
-import { createMdqlError } from './errors.js';
+import { createSqlmdError } from './errors.js';
 import { quoteIdentifier } from './model.js';
 import type { IndexBackend } from './store.js';
 
@@ -18,7 +18,7 @@ export interface SqlTable {
 
 export type Driver = 'better-sqlite3' | 'node:sqlite';
 
-/** The small slice of a synchronous SQLite driver that mdql needs. */
+/** The small slice of a synchronous SQLite driver that sqlmd needs. */
 export interface Engine {
   readonly driver: Driver;
   readonly exec: (sql: string) => void;
@@ -73,7 +73,7 @@ const openNodeSqlite = async (): Promise<Engine> => {
   const probe = db.prepare('SELECT 1');
   if (typeof probe.setReturnArrays !== 'function') {
     db.close();
-    throw createMdqlError(
+    throw createSqlmdError(
       'CONFIG',
       'The node:sqlite driver needs StatementSync#setReturnArrays (Node.js 22.16 or later).',
     );
@@ -125,7 +125,7 @@ const writing = (engine: Engine, task: () => void) => {
 };
 
 /**
- * The SQLite index behind `mdql` and `mdql/drizzle`. Every write is synchronous inside one call, so
+ * The SQLite index behind `sqlmd` and `sqlmd/drizzle`. Every write is synchronous inside one call, so
  * turning `query_only` off can never interleave with a user query.
  */
 export const createSqliteBackend = (engine: Engine): IndexBackend<SqlParam> => {

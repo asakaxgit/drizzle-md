@@ -1,4 +1,4 @@
-# Contributing to mdql
+# Contributing to sqlmd
 
 ## Setup
 
@@ -12,11 +12,11 @@ npm run build
 npm run check:dist # checks the built bundles: the node:sqlite import, and no drizzle-orm or PGlite in the main entry
 ```
 
-The `mdql/pg` tests start several PGlite instances (about 0.5 s and 600 MB each, one at a time per test file), so `npm test` takes a few seconds longer than the SQLite tests alone.
+The `sqlmd/pg` tests start several PGlite instances (about 0.5 s and 600 MB each, one at a time per test file), so `npm test` takes a few seconds longer than the SQLite tests alone.
 
 ## Entry points
 
-`src/index.ts` (`mdql`) must not import `drizzle-orm`, `@electric-sql/pglite` or anything under `src/drizzle/` or `src/pg/`, directly or through a shared module: those are optional peer dependencies. Put Drizzle-specific code in `src/drizzle/` (shared by both Drizzle entry points) or `src/pg/`. `npm run check:dist` enforces this on the built files.
+`src/index.ts` (`sqlmd`) must not import `drizzle-orm`, `@electric-sql/pglite` or anything under `src/drizzle/` or `src/pg/`, directly or through a shared module: those are optional peer dependencies. Put Drizzle-specific code in `src/drizzle/` (shared by both Drizzle entry points) or `src/pg/`. `npm run check:dist` enforces this on the built files.
 
 Commits need a DCO sign-off (`git commit -s`) and an English message in the
 [Conventional Commits](https://www.conventionalcommits.org) style, e.g. `feat: add nested folders`.

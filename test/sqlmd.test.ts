@@ -2,14 +2,14 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { findMdqlError, isMdqlError, type Mdql, mdql } from '../src/index.js';
+import { findSqlmdError, isSqlmdError, type Sqlmd, sqlmd } from '../src/index.js';
 import { copyFixture, fixture, nextEvent } from './helpers.js';
 
-describe('mdql with inferred tables and columns', () => {
-  let md: Mdql;
+describe('sqlmd with inferred tables and columns', () => {
+  let md: Sqlmd;
 
   beforeAll(async () => {
-    md = await mdql({ root: fixture('content') });
+    md = await sqlmd({ root: fixture('content') });
   });
 
   afterAll(async () => {
@@ -82,11 +82,11 @@ describe('mdql with inferred tables and columns', () => {
 
   it('rejects writes as READ_ONLY', async () => {
     await expect(md.query("delete from posts where id = 'hello-world'")).rejects.toSatisfy(
-      (error: Error) => isMdqlError(error, 'READ_ONLY'),
+      (error: Error) => isSqlmdError(error, 'READ_ONLY'),
     );
     await expect(
       md.query("with gone as (select 1) delete from posts where id = 'hello-world'"),
-    ).rejects.toSatisfy((error: Error) => isMdqlError(error, 'READ_ONLY'));
+    ).rejects.toSatisfy((error: Error) => isSqlmdError(error, 'READ_ONLY'));
     expect(await md.query('select count(*) as n from posts')).toEqual([{ n: 3 }]);
   });
 
@@ -101,9 +101,9 @@ describe('mdql with inferred tables and columns', () => {
   });
 });
 
-describe('mdql with declared tables', () => {
+describe('sqlmd with declared tables', () => {
   it('uses declared columns, folders, keys and bodies', async () => {
-    const md = await mdql({
+    const md = await sqlmd({
       root: fixture('content'),
       tables: {
         articles: {
@@ -145,7 +145,7 @@ describe('mdql with declared tables', () => {
   });
 
   it('reports files that do not match declared columns', async () => {
-    const md = await mdql({
+    const md = await sqlmd({
       root: fixture('invalid'),
       onInvalid: 'skip',
       tables: { posts: { columns: { title: { type: 'text', required: true }, views: 'integer' } } },
@@ -168,18 +168,18 @@ describe('mdql with declared tables', () => {
   });
 
   it('rejects invalid files on the first load by default', async () => {
-    const error = await mdql({ root: fixture('invalid') }).catch((caught: Error) => caught);
-    expect(findMdqlError(error)?.code).toBe('VALIDATION');
+    const error = await sqlmd({ root: fixture('invalid') }).catch((caught: Error) => caught);
+    expect(findSqlmdError(error)?.code).toBe('VALIDATION');
   });
 
   it('works with the node:sqlite driver', async () => {
-    const md = await mdql({ root: fixture('content'), driver: 'node:sqlite' });
+    const md = await sqlmd({ root: fixture('content'), driver: 'node:sqlite' });
     try {
       expect(await md.sql`select name from authors where email is ${null}`).toEqual([
         { name: 'Grace Hopper' },
       ]);
       await expect(md.query('drop table authors')).rejects.toSatisfy((error: Error) =>
-        isMdqlError(error, 'READ_ONLY'),
+        isSqlmdError(error, 'READ_ONLY'),
       );
     } finally {
       await md.close();
@@ -187,7 +187,7 @@ describe('mdql with declared tables', () => {
   });
 });
 
-describe('mdql lifecycle', () => {
+describe('sqlmd lifecycle', () => {
   let cleanup: (() => Promise<void>) | undefined;
 
   afterEach(async () => {
@@ -198,7 +198,7 @@ describe('mdql lifecycle', () => {
   it('applies file changes while watching', async () => {
     const copy = await copyFixture('content');
     cleanup = copy.cleanup;
-    const md = await mdql({ root: copy.root, watch: { debounceMs: 20 } });
+    const md = await sqlmd({ root: copy.root, watch: { debounceMs: 20 } });
     try {
       const added = nextEvent(md, (event) => event.key === 'third');
       await writeFile(
@@ -216,20 +216,20 @@ describe('mdql lifecycle', () => {
   });
 
   it('rejects queries after close()', async () => {
-    const md = await mdql({ root: fixture('content') });
+    const md = await sqlmd({ root: fixture('content') });
     await md.close();
     await md.close();
     await expect(md.query('select 1')).rejects.toSatisfy((error: Error) =>
-      isMdqlError(error, 'CLOSED'),
+      isSqlmdError(error, 'CLOSED'),
     );
   });
 });
 
-describe('mdql config', () => {
+describe('sqlmd config', () => {
   let root: string;
 
   beforeAll(async () => {
-    root = await mkdtemp(join(tmpdir(), 'mdql-core-'));
+    root = await mkdtemp(join(tmpdir(), 'sqlmd-core-'));
     await mkdir(join(root, 'notes'));
     await mkdir(join(root, '.git'));
     await mkdir(join(root, '_drafts'));
@@ -243,16 +243,16 @@ describe('mdql config', () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  const configError = async (promise: Promise<Mdql>): Promise<string | undefined> => {
+  const configError = async (promise: Promise<Sqlmd>): Promise<string | undefined> => {
     const error = await promise.then(
       () => undefined,
       (caught: Error) => caught,
     );
-    return findMdqlError(error)?.code === 'CONFIG' ? error?.message : undefined;
+    return findSqlmdError(error)?.code === 'CONFIG' ? error?.message : undefined;
   };
 
   it('skips folders starting with . or _ and widens mixed column types', async () => {
-    const md = await mdql({ root });
+    const md = await sqlmd({ root });
     try {
       expect(md.tables().map((table) => table.table)).toEqual(['notes']);
       expect(md.tables()[0]?.columns.map((column) => [column.name, column.type])).toEqual([
@@ -273,7 +273,7 @@ describe('mdql config', () => {
   });
 
   it('treats a declared table with a missing folder as empty', async () => {
-    const md = await mdql({ root, tables: { missing: {} } });
+    const md = await sqlmd({ root, tables: { missing: {} } });
     try {
       expect(await md.query('select count(*) as n from missing')).toEqual([{ n: 0 }]);
     } finally {
@@ -282,12 +282,12 @@ describe('mdql config', () => {
   });
 
   it('rejects bad configuration as CONFIG errors', async () => {
-    expect(await configError(mdql({ root: join(root, 'nope') }))).toMatch(/Cannot read/);
-    expect(await configError(mdql({ root: join(root, '_drafts') }))).toMatch(/no table folders/);
-    expect(await configError(mdql({ root, tables: {} }))).toMatch(/tables is empty/);
+    expect(await configError(sqlmd({ root: join(root, 'nope') }))).toMatch(/Cannot read/);
+    expect(await configError(sqlmd({ root: join(root, '_drafts') }))).toMatch(/no table folders/);
+    expect(await configError(sqlmd({ root, tables: {} }))).toMatch(/tables is empty/);
     expect(
       await configError(
-        mdql({
+        sqlmd({
           root,
           tables: { notes: { columns: { n: { type: 'text', values: ['a'] }, x: 'real' } } },
         }),
@@ -295,23 +295,23 @@ describe('mdql config', () => {
     ).toBeUndefined();
     expect(
       await configError(
-        mdql({ root, tables: { notes: { columns: { n: { type: 'real', values: ['a'] } } } } }),
+        sqlmd({ root, tables: { notes: { columns: { n: { type: 'real', values: ['a'] } } } } }),
       ),
     ).toMatch(/only allowed on text/);
     expect(
       await configError(
         // A JavaScript caller can pass any string; the type check is at runtime too.
-        mdql({ root, tables: { notes: { columns: JSON.parse('{"n":"float"}') } } }),
+        sqlmd({ root, tables: { notes: { columns: JSON.parse('{"n":"float"}') } } }),
       ),
     ).toMatch(/unknown type "float"/);
-    expect(await configError(mdql({ root, tables: { notes: { key: 'x', body: 'x' } } }))).toMatch(
+    expect(await configError(sqlmd({ root, tables: { notes: { key: 'x', body: 'x' } } }))).toMatch(
       /cannot both be/,
     );
     expect(
-      await configError(mdql({ root, tables: { notes: { columns: { id: 'text' } } } })),
+      await configError(sqlmd({ root, tables: { notes: { columns: { id: 'text' } } } })),
     ).toMatch(/already the key column/);
     expect(
-      await configError(mdql({ root, tables: { notes: { columns: { body: 'text' } } } })),
+      await configError(sqlmd({ root, tables: { notes: { columns: { body: 'text' } } } })),
     ).toMatch(/already the body column/);
   });
 });

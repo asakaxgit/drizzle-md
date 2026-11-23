@@ -3,13 +3,13 @@ import { readdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { toSqlParam } from './coerce.js';
 import {
-  buildMdqlModel,
+  buildSqlmdModel,
   type ColumnDefinition,
   type ColumnType,
   inferColumns,
-  type MdqlTableOptions,
+  type SqlmdTableOptions,
 } from './columns.js';
-import { type BaseOptions, type MdqlIndex, openIndex } from './core.js';
+import { type BaseOptions, openIndex, type SqlmdIndex } from './core.js';
 import {
   createSqliteBackend,
   type Driver,
@@ -18,25 +18,25 @@ import {
   type SqlParam,
   type SqlValue,
 } from './engine.js';
-import { createMdqlError, findMdqlError } from './errors.js';
+import { createSqlmdError, findSqlmdError } from './errors.js';
 import type { ColumnRole, TableModel } from './model.js';
 import { closedError, READ_STATEMENT, readOnlyError } from './read-only.js';
 
-export interface MdqlOptions extends BaseOptions {
+export interface SqlmdOptions extends BaseOptions {
   /**
    * Tables by SQL name. Left out, every sub-folder of `root` (except ones starting with `.` or
    * `_`) is a table named after the folder, with columns inferred from its files.
    */
-  readonly tables?: Readonly<Record<string, MdqlTableOptions>>;
+  readonly tables?: Readonly<Record<string, SqlmdTableOptions>>;
   /** SQLite driver for the in-memory index. Defaults to `better-sqlite3`. */
   readonly driver?: Driver;
 }
 
 /** A value bound to a `?` placeholder. Booleans are bound as `1` and `0`. */
-export type MdqlParam = SqlParam | boolean;
+export type SqlmdParam = SqlParam | boolean;
 
 /** One result row, keyed by result column name. When two columns share a name, the last wins. */
-export interface MdqlRow {
+export interface SqlmdRow {
   readonly [column: string]: SqlValue;
 }
 
@@ -53,12 +53,12 @@ export interface TableInfo {
   readonly columns: readonly ColumnInfo[];
 }
 
-export interface Mdql extends MdqlIndex {
+export interface Sqlmd extends SqlmdIndex {
   /**
    * Runs one read-only SQL statement (`SELECT`, `WITH`, `VALUES` or `EXPLAIN`) with `?`
    * parameters and returns its rows.
    */
-  readonly query: (sql: string, params?: readonly MdqlParam[]) => Promise<readonly MdqlRow[]>;
+  readonly query: (sql: string, params?: readonly SqlmdParam[]) => Promise<readonly SqlmdRow[]>;
   /**
    * Tagged-template form of `query`: every `${value}` becomes a bound parameter, never SQL text.
    *
@@ -67,8 +67,8 @@ export interface Mdql extends MdqlIndex {
    */
   readonly sql: (
     strings: TemplateStringsArray,
-    ...values: readonly MdqlParam[]
-  ) => Promise<readonly MdqlRow[]>;
+    ...values: readonly SqlmdParam[]
+  ) => Promise<readonly SqlmdRow[]>;
   /** The tables and columns of the index, including inferred ones. */
   readonly tables: () => readonly TableInfo[];
 }
@@ -78,12 +78,12 @@ const isSqliteReadOnlyError = <T>(error: T): error is T & Error =>
 
 const discoverTables = async (
   root: string,
-): Promise<Readonly<Record<string, MdqlTableOptions>>> => {
+): Promise<Readonly<Record<string, SqlmdTableOptions>>> => {
   let entries: Dirent[];
   try {
     entries = await readdir(root, { withFileTypes: true });
   } catch (error) {
-    throw createMdqlError(
+    throw createSqlmdError(
       'CONFIG',
       `Cannot read the root folder ${root}: ${error instanceof Error ? error.message : String(error)}`,
       error instanceof Error ? { cause: error } : {},
@@ -94,18 +94,18 @@ const discoverTables = async (
     .map((entry) => entry.name)
     .sort((a, b) => a.localeCompare(b));
   if (tables.length === 0) {
-    throw createMdqlError('CONFIG', `The root folder ${root} has no table folders.`);
+    throw createSqlmdError('CONFIG', `The root folder ${root} has no table folders.`);
   }
   return Object.fromEntries(tables.map((table) => [table, {}]));
 };
 
-const buildModels = async (options: MdqlOptions): Promise<readonly TableModel[]> => {
+const buildModels = async (options: SqlmdOptions): Promise<readonly TableModel[]> => {
   const root = resolve(options.root);
   const tables = options.tables ?? (await discoverTables(root));
   const extensions = options.extensions ?? ['.md'];
   const entries = Object.entries(tables);
   if (entries.length === 0) {
-    throw createMdqlError('CONFIG', 'tables is empty: declare at least one table.');
+    throw createSqlmdError('CONFIG', 'tables is empty: declare at least one table.');
   }
   const models: TableModel[] = [];
   for (const [table, tableOptions] of entries) {
@@ -116,7 +116,7 @@ const buildModels = async (options: MdqlOptions): Promise<readonly TableModel[]>
     const columns =
       tableOptions.columns ??
       (await inferColumns(join(root, tableOptions.dir ?? table), extensions, reserved));
-    models.push(buildMdqlModel(table, tableOptions, columns));
+    models.push(buildSqlmdModel(table, tableOptions, columns));
   }
   return models;
 };
@@ -141,18 +141,18 @@ const tableInfo = (model: TableModel): TableInfo => ({
   })),
 });
 
-const runQuery = (engine: Engine, statement: string, params: readonly MdqlParam[]): MdqlRow[] => {
+const runQuery = (engine: Engine, statement: string, params: readonly SqlmdParam[]): SqlmdRow[] => {
   if (!READ_STATEMENT.test(statement)) {
     throw readOnlyError(statement);
   }
   try {
     const result = engine.table(statement, params.map(toSqlParam));
     return result.rows.map(
-      (row): MdqlRow =>
+      (row): SqlmdRow =>
         Object.fromEntries(result.columns.map((column, index) => [column, row[index] ?? null])),
     );
   } catch (error) {
-    if (isSqliteReadOnlyError(error) && findMdqlError(error) === undefined) {
+    if (isSqliteReadOnlyError(error) && findSqlmdError(error) === undefined) {
       throw readOnlyError(statement, error);
     }
     throw error;
@@ -164,13 +164,13 @@ const runQuery = (engine: Engine, statement: string, params: readonly MdqlParam[
  * read-only SQL. No ORM needed: tables come from the folders and columns from the frontmatter,
  * inferred or declared in `tables`.
  *
- * For Drizzle, import `drizzleMd` from `mdql/drizzle` (SQLite) or `mdql/pg` (PGlite) instead.
+ * For Drizzle, import `drizzleMd` from `sqlmd/drizzle` (SQLite) or `sqlmd/pg` (PGlite) instead.
  *
  * @example
- * const md = await mdql({ root: 'content' });
+ * const md = await sqlmd({ root: 'content' });
  * const posts = await md.sql`select id, title from posts where draft = ${false} order by id`;
  */
-export const mdql = async (options: MdqlOptions): Promise<Mdql> => {
+export const sqlmd = async (options: SqlmdOptions): Promise<Sqlmd> => {
   const models = await buildModels(options);
   const engine = await openEngine(options.driver ?? 'better-sqlite3');
   try {
@@ -192,7 +192,7 @@ export const mdql = async (options: MdqlOptions): Promise<Mdql> => {
     },
   });
 
-  const query = async (statement: string, params: readonly MdqlParam[] = []) => {
+  const query = async (statement: string, params: readonly SqlmdParam[] = []) => {
     if (index.isClosed()) {
       throw closedError();
     }
@@ -209,4 +209,4 @@ export const mdql = async (options: MdqlOptions): Promise<Mdql> => {
   };
 };
 
-export type { ColumnDefinition, ColumnType, MdqlTableOptions };
+export type { ColumnDefinition, ColumnType, SqlmdTableOptions };

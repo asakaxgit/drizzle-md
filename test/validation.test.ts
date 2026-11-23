@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   type Diagnostic,
   drizzleMd,
-  findMdqlError,
+  findSqlmdError,
   formatDiagnostic,
 } from '../src/drizzle/index.js';
 import { fixture } from './helpers.js';
@@ -16,7 +16,7 @@ describe('validation', () => {
       () => undefined,
       (caught: Error) => caught,
     );
-    const found = findMdqlError(error);
+    const found = findSqlmdError(error);
     expect(found?.code).toBe('VALIDATION');
     expect(found?.message).toContain('3 markdown file problem(s)');
     expect(found?.diagnostics.map((d) => [d.file, d.code, d.column]).sort()).toEqual([

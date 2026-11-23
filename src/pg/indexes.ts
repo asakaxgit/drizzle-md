@@ -1,7 +1,7 @@
 import { is, SQL } from 'drizzle-orm';
 import { getTableConfig, IndexedColumn, PgDialect, PgTable } from 'drizzle-orm/pg-core';
 import type { DrizzleTableModel } from '../drizzle/schema.js';
-import { createMdqlError } from '../errors.js';
+import { createSqlmdError } from '../errors.js';
 import { quoteIdentifier } from '../model.js';
 
 /** One `CREATE INDEX` statement for an index declared in a `pgTable`. */
@@ -21,7 +21,7 @@ type WithValue = string | number | boolean;
 const dialect = new PgDialect();
 
 const unsupported = (table: string, label: string, reason: string) =>
-  createMdqlError('CONFIG', `Table "${table}", index ${label}: ${reason}`);
+  createSqlmdError('CONFIG', `Table "${table}", index ${label}: ${reason}`);
 
 /** Renders SQL as drizzle-kit does for indexes: unqualified column names, no parameters. */
 const renderSql = (expression: SQL, table: string, label: string): string => {

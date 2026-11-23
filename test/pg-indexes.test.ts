@@ -6,7 +6,7 @@ import { sql } from 'drizzle-orm';
 import { boolean, index, pgTable, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildModels } from '../src/drizzle/schema.js';
-import { drizzleMd, isMdqlError } from '../src/pg/index.js';
+import { drizzleMd, isSqlmdError } from '../src/pg/index.js';
 import { indexDdl } from '../src/pg/indexes.js';
 import { pgDialect } from '../src/pg/schema.js';
 
@@ -36,7 +36,7 @@ const doc = (title: string, slug: string, extra = '') =>
   `---\ntitle: ${title}\nslug: ${slug}\ntags: [a]\npublished: 2026-11-01\n${extra}---\nBody\n`;
 
 const withDocs = async (files: Readonly<Record<string, string>>) => {
-  const root = await mkdtemp(join(tmpdir(), 'mdql-idx-'));
+  const root = await mkdtemp(join(tmpdir(), 'sqlmd-idx-'));
   await mkdir(join(root, 'docs'));
   for (const [name, content] of Object.entries(files)) {
     await writeFile(join(root, 'docs', name), content);
@@ -84,7 +84,7 @@ describe('indexDdl', () => {
   });
 });
 
-describe('mdql/pg indexes', () => {
+describe('sqlmd/pg indexes', () => {
   let md: Awaited<ReturnType<typeof drizzleMd<{ docs: typeof docs }>>>;
   let cleanup: () => Promise<void>;
 
@@ -144,7 +144,7 @@ describe('mdql/pg indexes', () => {
   });
 });
 
-describe('mdql/pg index errors', () => {
+describe('sqlmd/pg index errors', () => {
   it('reports an index Postgres cannot build as a CONFIG error', async () => {
     const broken = pgTable('docs', { id: text().primaryKey(), title: text() }, (t) => [
       index('docs_trgm').using('gin', t.title.op('gin_trgm_ops')),
@@ -154,7 +154,7 @@ describe('mdql/pg index errors', () => {
       const error = await caught(
         drizzleMd({ root, schema: { broken }, tables: { broken: { dir: 'docs' } } }),
       );
-      expect(isMdqlError(error, 'CONFIG')).toBe(true);
+      expect(isSqlmdError(error, 'CONFIG')).toBe(true);
       expect(error?.message).toContain('index "docs_trgm" could not be created');
     } finally {
       await cleanup();

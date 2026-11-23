@@ -1,4 +1,4 @@
-import { createMdqlError } from '../errors.js';
+import { createSqlmdError } from '../errors.js';
 import { packageVersion } from './versions.js';
 
 export const PGLITE = '@electric-sql/pglite';
@@ -48,7 +48,7 @@ export const chooseSnapshot = async (
   ]);
   const fail = (message: string, cause?: Error): SnapshotChoice => {
     if (required) {
-      throw createMdqlError(
+      throw createSqlmdError(
         'CONFIG',
         `prepopulated: true, but ${message}`,
         cause === undefined ? {} : { cause },

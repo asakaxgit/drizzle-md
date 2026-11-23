@@ -1,12 +1,12 @@
 import { resolve } from 'node:path';
-import { createMdqlError, type Diagnostic, formatDiagnostic } from './errors.js';
+import { createSqlmdError, type Diagnostic, formatDiagnostic } from './errors.js';
 import { schemaHash, type TableModel } from './model.js';
 import { type ChangeEvent, createStore, type IndexBackend, type TableReport } from './store.js';
 import { startWatcher, type Watcher, type WatchOptions } from './watcher.js';
 
 export type InvalidFileMode = 'throw' | 'skip';
 
-/** Options shared by every mdql entry point. */
+/** Options shared by every sqlmd entry point. */
 export interface BaseOptions {
   /** Folder that holds one sub-folder per table. Relative paths resolve from the working directory. */
   readonly root: string;
@@ -33,8 +33,8 @@ export interface IndexReport {
 
 export type ChangeListener = (events: readonly ChangeEvent[]) => void;
 
-/** The index lifecycle every mdql instance has, whatever its query surface. */
-export interface MdqlIndex {
+/** The index lifecycle every sqlmd instance has, whatever its query surface. */
+export interface SqlmdIndex {
   /** Current diagnostics for files that are left out of the index. */
   readonly diagnostics: () => readonly Diagnostic[];
   /** Row counts, skipped files and frontmatter keys that match no column, per table. */
@@ -51,7 +51,7 @@ export interface MdqlIndex {
   readonly close: () => Promise<void>;
 }
 
-export interface IndexHandle extends MdqlIndex {
+export interface IndexHandle extends SqlmdIndex {
   readonly isClosed: () => boolean;
 }
 
@@ -91,7 +91,7 @@ export const openIndex = async <TParam>(open: OpenIndexOptions<TParam>): Promise
   const initial = store.diagnostics();
   if ((options.onInvalid ?? 'throw') === 'throw' && initial.length > 0) {
     await closeBackend();
-    throw createMdqlError(
+    throw createSqlmdError(
       'VALIDATION',
       `${initial.length} markdown file problem(s):\n${initial.map(formatDiagnostic).join('\n')}`,
       { diagnostics: initial },

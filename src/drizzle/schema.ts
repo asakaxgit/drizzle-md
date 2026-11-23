@@ -10,7 +10,7 @@ import {
 } from 'drizzle-orm';
 import { PgArray } from 'drizzle-orm/pg-core';
 import { getTableConfig, SQLiteSyncDialect, SQLiteTable } from 'drizzle-orm/sqlite-core';
-import { createMdqlError } from '../errors.js';
+import { createSqlmdError } from '../errors.js';
 import {
   type ColumnModel,
   type ColumnRole,
@@ -174,21 +174,21 @@ const buildTableModel = <TTable extends Table>(
   );
   const generated = columns.find((model) => model.column.generated !== undefined);
   if (generated !== undefined) {
-    throw createMdqlError(
+    throw createSqlmdError(
       'CONFIG',
       `Table "${schemaKey}": generated column "${generated.key}" is not supported yet.`,
     );
   }
   const keyColumn = columns.find((model) => model.role === 'key');
   if (keyColumn === undefined) {
-    throw createMdqlError(
+    throw createSqlmdError(
       'CONFIG',
       `Table "${schemaKey}" has no column "${keyName}" for the file name. Add one or set tables.${schemaKey}.key.`,
     );
   }
   const bodyColumn = columns.find((model) => model.role === 'body');
   if (options.body !== undefined && options.body !== false && bodyColumn === undefined) {
-    throw createMdqlError(
+    throw createSqlmdError(
       'CONFIG',
       `Table "${schemaKey}" has no column "${options.body}" for the markdown body.`,
     );
@@ -221,13 +221,13 @@ export const buildModels = <TSchema extends Record<string, object>, TTable exten
       : [],
   );
   if (models.length === 0) {
-    throw createMdqlError('CONFIG', `The schema has no Drizzle ${dialect.label} tables.`);
+    throw createSqlmdError('CONFIG', `The schema has no Drizzle ${dialect.label} tables.`);
   }
   const unknownOptions = Object.keys(options).filter(
     (key) => !models.some((model) => model.schemaKey === key),
   );
   if (unknownOptions.length > 0) {
-    throw createMdqlError(
+    throw createSqlmdError(
       'CONFIG',
       `tables has options for ${unknownOptions.map((key) => `"${key}"`).join(', ')}, which are not tables in the schema.`,
     );
@@ -235,7 +235,10 @@ export const buildModels = <TSchema extends Record<string, object>, TTable exten
   const names = new Set<string>();
   for (const model of models) {
     if (names.has(model.name)) {
-      throw createMdqlError('CONFIG', `Two schema entries use the SQL table name "${model.name}".`);
+      throw createSqlmdError(
+        'CONFIG',
+        `Two schema entries use the SQL table name "${model.name}".`,
+      );
     }
     names.add(model.name);
   }
