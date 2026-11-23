@@ -2,7 +2,7 @@ import { readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { type Diagnostic, type DrizzleMd, drizzleMd } from '../src/index.js';
+import { type Diagnostic, type DrizzleMd, drizzleMd } from '../src/drizzle/index.js';
 import { copyFixture, nextEvent } from './helpers.js';
 import { posts, schema } from './schema.js';
 

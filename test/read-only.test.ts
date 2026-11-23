@@ -1,6 +1,6 @@
 import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { type DrizzleMd, drizzleMd, findDrizzleMdError, isDrizzleMdError } from '../src/index.js';
+import { type DrizzleMd, drizzleMd, findMdqlError, isMdqlError } from '../src/drizzle/index.js';
 import { fixture } from './helpers.js';
 import { posts, schema } from './schema.js';
 
@@ -20,8 +20,8 @@ describe.each(['better-sqlite3', 'node:sqlite'] as const)('read-only with %s', (
       () => undefined,
       (caught: Error) => caught,
     );
-    expect(isDrizzleMdError(error, 'READ_ONLY')).toBe(true);
-    expect(findDrizzleMdError(error)?.message).toContain('read-only');
+    expect(isMdqlError(error, 'READ_ONLY')).toBe(true);
+    expect(findMdqlError(error)?.message).toContain('read-only');
   };
 
   it('rejects inserts, updates and deletes', async () => {
@@ -67,7 +67,7 @@ describe('closed instance', () => {
         () => undefined,
         (caught: Error) => caught,
       );
-    expect(isDrizzleMdError(error, 'CLOSED')).toBe(true);
-    expect(isDrizzleMdError(new Error('other'))).toBe(false);
+    expect(isMdqlError(error, 'CLOSED')).toBe(true);
+    expect(isMdqlError(new Error('other'))).toBe(false);
   });
 });

@@ -1,20 +1,27 @@
-import { createHash } from 'node:crypto';
-import { type Column, getTableColumns, getTableName, is, type Table } from 'drizzle-orm';
-import { getTableConfig, SQLiteTable } from 'drizzle-orm/sqlite-core';
-import { createDrizzleMdError } from './errors.js';
+import {
+  type Column,
+  getTableColumns,
+  getTableName,
+  is,
+  type Query,
+  SQL,
+  sql,
+  type Table,
+} from 'drizzle-orm';
+import { PgArray } from 'drizzle-orm/pg-core';
+import { getTableConfig, SQLiteSyncDialect, SQLiteTable } from 'drizzle-orm/sqlite-core';
+import { createMdqlError } from '../errors.js';
+import {
+  type ColumnModel,
+  type ColumnRole,
+  type ColumnSpec,
+  quoteIdentifier,
+  type TableModel,
+  type TableOptions,
+  type ValueKind,
+} from '../model.js';
 
-/** Per-table settings. Every field is optional. */
-export interface TableOptions {
-  /** Folder under `root` that holds this table's files. Defaults to the SQL table name. */
-  readonly dir?: string;
-  /** Property name of the column filled from the file name (without extension). Defaults to `id`. */
-  readonly key?: string;
-  /**
-   * Property name of the column filled from the markdown body. Defaults to `body`; when the
-   * table has no such column the body is not stored. Pass `false` to never store it.
-   */
-  readonly body?: string | false;
-}
+export type { TableOptions } from '../model.js';
 
 /**
  * Keys of `TSchema` whose values are Drizzle tables of the `TTable` kind (SQLite by default).
@@ -29,31 +36,17 @@ export type TablesOptions<TSchema, TTable extends Table = SQLiteTable> = {
   readonly [K in TableKeys<TSchema, TTable>]?: TableOptions;
 };
 
-export type ColumnRole = 'key' | 'body' | 'data';
-
-export interface ColumnModel {
-  /** Property name in the Drizzle table, also the frontmatter key. */
-  readonly key: string;
-  /** SQL column name. */
-  readonly name: string;
-  readonly role: ColumnRole;
+/** A column model that keeps its Drizzle column, for dialect-specific DDL such as enums. */
+export interface DrizzleColumnModel extends ColumnModel {
   readonly column: Column;
 }
 
-export interface TableModel {
-  /** Key of the table in the schema object. */
-  readonly schemaKey: string;
-  /** SQL table name. */
-  readonly name: string;
-  /** Folder relative to root. */
-  readonly dir: string;
+/** A table model that keeps its Drizzle table, e.g. to read indexes from its extra config. */
+export interface DrizzleTableModel extends TableModel {
   readonly table: Table;
-  readonly columns: readonly ColumnModel[];
-  readonly keyColumn: ColumnModel;
-  readonly ddl: string;
+  readonly columns: readonly DrizzleColumnModel[];
+  readonly keyColumn: DrizzleColumnModel;
 }
-
-export const quoteIdentifier = (name: string): string => `"${name.replaceAll('"', '""')}"`;
 
 /** What differs between SQL dialects when tables are turned into models. */
 export interface TableDialect<TTable extends Table> {
@@ -66,7 +59,11 @@ export interface TableDialect<TTable extends Table> {
   readonly columnType: (column: Column) => string;
   /** Throws a `CONFIG` error for tables the dialect cannot index. */
   readonly checkTable?: (schemaKey: string, table: TTable) => void;
+  /** Compiles `select <expression>` for evaluating a SQL column default. */
+  readonly compileDefault: (expression: SQL) => Query;
 }
+
+const sqliteSync = new SQLiteSyncDialect();
 
 export const sqliteDialect: TableDialect<SQLiteTable> = {
   label: 'SQLite',
@@ -74,9 +71,59 @@ export const sqliteDialect: TableDialect<SQLiteTable> = {
   compositePrimaryKeys: (table) =>
     getTableConfig(table).primaryKeys.flatMap((pk) => pk.columns.map((column) => column.name)),
   columnType: (column) => column.getSQLType(),
+  compileDefault: (expression) => sqliteSync.sqlToQuery(sql`select ${expression}`),
 };
 
-const columnDdl = (model: ColumnModel, columnType: (column: Column) => string): string => {
+const KINDS: readonly ValueKind[] = [
+  'string',
+  'number',
+  'bigint',
+  'boolean',
+  'date',
+  'array',
+  'json',
+  'custom',
+];
+
+const kindOf = (column: Column): ValueKind =>
+  KINDS.find((kind) => kind === column.dataType) ?? 'unsupported';
+
+/** Describes a Drizzle column to the Drizzle-free loader. */
+export const columnSpec = (
+  column: Column,
+  compileDefault: (expression: SQL) => Query,
+): ColumnSpec => {
+  const element = is(column, PgArray) ? columnSpec(column.baseColumn, compileDefault) : undefined;
+  const enumValues: readonly string[] | undefined = column.enumValues;
+  return {
+    kind: kindOf(column),
+    sqlType: column.getSQLType(),
+    notNull: column.notNull,
+    ...(enumValues === undefined ? {} : { enumValues }),
+    ...(element === undefined ? {} : { element }),
+    typeName: column.columnType,
+    bind: (value, toParam) => toParam(column.mapToDriverValue(value)),
+    resolveDefault: async (context) => {
+      const fromDefault = column.defaultFn === undefined ? column.default : column.defaultFn();
+      if (fromDefault === undefined) {
+        return { found: false };
+      }
+      if (is(fromDefault, SQL)) {
+        const query = compileDefault(fromDefault);
+        return {
+          found: true,
+          param: await context.evaluate({
+            sql: query.sql,
+            params: query.params.map(context.toParam),
+          }),
+        };
+      }
+      return { found: true, param: context.toParam(column.mapToDriverValue(fromDefault)) };
+    },
+  };
+};
+
+const columnDdl = (model: DrizzleColumnModel, columnType: (column: Column) => string): string => {
   const { column } = model;
   const parts = [quoteIdentifier(model.name), columnType(column)];
   if (column.notNull) {
@@ -87,7 +134,7 @@ const columnDdl = (model: ColumnModel, columnType: (column: Column) => string): 
 
 const tableDdl = (
   name: string,
-  columns: readonly ColumnModel[],
+  columns: readonly DrizzleColumnModel[],
   primaryKey: readonly string[],
   columnType: (column: Column) => string,
 ) => {
@@ -110,37 +157,38 @@ const buildTableModel = <TTable extends Table>(
   table: TTable,
   options: TableOptions,
   dialect: TableDialect<TTable>,
-): TableModel => {
+): DrizzleTableModel => {
   dialect.checkTable?.(schemaKey, table);
   const name = getTableName(table);
   const keyName = options.key ?? 'id';
   const bodyName = options.body ?? 'body';
   const tableColumns: Readonly<Record<string, Column>> = getTableColumns(table);
   const columns = Object.entries(tableColumns).map(
-    ([key, column]): ColumnModel => ({
+    ([key, column]): DrizzleColumnModel => ({
       key,
       name: column.name,
       role: roleOf(key, keyName, bodyName),
       column,
+      spec: columnSpec(column, dialect.compileDefault),
     }),
   );
   const generated = columns.find((model) => model.column.generated !== undefined);
   if (generated !== undefined) {
-    throw createDrizzleMdError(
+    throw createMdqlError(
       'CONFIG',
       `Table "${schemaKey}": generated column "${generated.key}" is not supported yet.`,
     );
   }
   const keyColumn = columns.find((model) => model.role === 'key');
   if (keyColumn === undefined) {
-    throw createDrizzleMdError(
+    throw createMdqlError(
       'CONFIG',
       `Table "${schemaKey}" has no column "${keyName}" for the file name. Add one or set tables.${schemaKey}.key.`,
     );
   }
   const bodyColumn = columns.find((model) => model.role === 'body');
   if (options.body !== undefined && options.body !== false && bodyColumn === undefined) {
-    throw createDrizzleMdError(
+    throw createMdqlError(
       'CONFIG',
       `Table "${schemaKey}" has no column "${options.body}" for the markdown body.`,
     );
@@ -165,7 +213,7 @@ export const buildModels = <TSchema extends Record<string, object>, TTable exten
   schema: TSchema,
   tables: TablesOptions<TSchema, TTable> = {},
   dialect: TableDialect<TTable>,
-): readonly TableModel[] => {
+): readonly DrizzleTableModel[] => {
   const options: Readonly<Record<string, TableOptions | undefined>> = tables;
   const models = Object.entries(schema).flatMap(([schemaKey, value]) =>
     dialect.isTable(value)
@@ -173,13 +221,13 @@ export const buildModels = <TSchema extends Record<string, object>, TTable exten
       : [],
   );
   if (models.length === 0) {
-    throw createDrizzleMdError('CONFIG', `The schema has no Drizzle ${dialect.label} tables.`);
+    throw createMdqlError('CONFIG', `The schema has no Drizzle ${dialect.label} tables.`);
   }
   const unknownOptions = Object.keys(options).filter(
     (key) => !models.some((model) => model.schemaKey === key),
   );
   if (unknownOptions.length > 0) {
-    throw createDrizzleMdError(
+    throw createMdqlError(
       'CONFIG',
       `tables has options for ${unknownOptions.map((key) => `"${key}"`).join(', ')}, which are not tables in the schema.`,
     );
@@ -187,26 +235,9 @@ export const buildModels = <TSchema extends Record<string, object>, TTable exten
   const names = new Set<string>();
   for (const model of models) {
     if (names.has(model.name)) {
-      throw createDrizzleMdError(
-        'CONFIG',
-        `Two schema entries use the SQL table name "${model.name}".`,
-      );
+      throw createMdqlError('CONFIG', `Two schema entries use the SQL table name "${model.name}".`);
     }
     names.add(model.name);
   }
   return models;
-};
-
-/**
- * A hash of everything that shapes the index: table and column names, SQL types, nullability,
- * folders and the key and body columns. A future on-disk cache rebuilds when it changes.
- */
-export const schemaHash = (models: readonly TableModel[]): string => {
-  const shape = models.map((model) => ({
-    table: model.name,
-    dir: model.dir,
-    ddl: model.ddl,
-    columns: model.columns.map((column) => [column.key, column.role, column.column.dataType]),
-  }));
-  return createHash('sha256').update(JSON.stringify(shape)).digest('hex');
 };

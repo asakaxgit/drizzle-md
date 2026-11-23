@@ -1,8 +1,6 @@
-import { sql } from 'drizzle-orm';
-import { SQLiteSyncDialect } from 'drizzle-orm/sqlite-core';
 import { toSqlParam } from './coerce.js';
-import { createDrizzleMdError } from './errors.js';
-import { quoteIdentifier } from './schema.js';
+import { createMdqlError } from './errors.js';
+import { quoteIdentifier } from './model.js';
 import type { IndexBackend } from './store.js';
 
 /** Values that can be bound to a SQLite statement. */
@@ -13,15 +11,22 @@ export type SqlValue = string | number | bigint | null | Uint8Array;
 
 export type SqlRow = SqlValue[];
 
+export interface SqlTable {
+  readonly columns: readonly string[];
+  readonly rows: readonly SqlRow[];
+}
+
 export type Driver = 'better-sqlite3' | 'node:sqlite';
 
-/** The small slice of a synchronous SQLite driver that drizzle-md needs. */
+/** The small slice of a synchronous SQLite driver that mdql needs. */
 export interface Engine {
   readonly driver: Driver;
   readonly exec: (sql: string) => void;
   readonly run: (sql: string, params: readonly SqlParam[]) => void;
   /** Runs a statement and returns rows as arrays, so joined columns with the same name survive. */
   readonly rows: (sql: string, params: readonly SqlParam[]) => SqlRow[];
+  /** Like `rows`, plus the result column names in order. */
+  readonly table: (sql: string, params: readonly SqlParam[]) => SqlTable;
   readonly close: () => void;
 }
 
@@ -45,6 +50,17 @@ const openBetterSqlite3 = async (): Promise<Engine> => {
       }
       return statement.raw(true).all(...params);
     },
+    table: (sql, params) => {
+      const statement = db.prepare<SqlParam[], SqlValue[]>(sql);
+      if (!statement.reader) {
+        statement.run(...params);
+        return { columns: [], rows: [] };
+      }
+      return {
+        columns: statement.columns().map((column) => column.name),
+        rows: statement.raw(true).all(...params),
+      };
+    },
     close: () => {
       db.close();
     },
@@ -57,7 +73,7 @@ const openNodeSqlite = async (): Promise<Engine> => {
   const probe = db.prepare('SELECT 1');
   if (typeof probe.setReturnArrays !== 'function') {
     db.close();
-    throw createDrizzleMdError(
+    throw createMdqlError(
       'CONFIG',
       'The node:sqlite driver needs StatementSync#setReturnArrays (Node.js 22.16 or later).',
     );
@@ -75,6 +91,14 @@ const openNodeSqlite = async (): Promise<Engine> => {
       statement.setReturnArrays(true);
       // With setReturnArrays each row is an array at runtime; Object.values keeps its order.
       return statement.all(...params).map((row) => Object.values(row));
+    },
+    table: (sql, params) => {
+      const statement = db.prepare(sql);
+      statement.setReturnArrays(true);
+      return {
+        columns: statement.columns().map((column) => column.name),
+        rows: statement.all(...params).map((row) => Object.values(row)),
+      };
     },
     close: () => {
       db.close();
@@ -101,17 +125,13 @@ const writing = (engine: Engine, task: () => void) => {
 };
 
 /**
- * The SQLite index behind the default entry point. Every write is synchronous inside one call, so
+ * The SQLite index behind `mdql` and `mdql/drizzle`. Every write is synchronous inside one call, so
  * turning `query_only` off can never interleave with a user query.
  */
 export const createSqliteBackend = (engine: Engine): IndexBackend<SqlParam> => {
-  const dialect = new SQLiteSyncDialect();
   return {
     toParam: toSqlParam,
-    evaluate: async (expression) => {
-      const query = dialect.sqlToQuery(sql`select ${expression}`);
-      return engine.rows(query.sql, query.params.map(toSqlParam))[0]?.[0] ?? null;
-    },
+    evaluate: async (query) => engine.rows(query.sql, query.params)[0]?.[0] ?? null,
     apply: async (model, changes) => {
       const table = quoteIdentifier(model.name);
       const deleteSql = `DELETE FROM ${table} WHERE ${quoteIdentifier(model.keyColumn.name)} = ?`;

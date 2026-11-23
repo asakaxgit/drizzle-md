@@ -13,12 +13,7 @@ import {
   text,
 } from 'drizzle-orm/pg-core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import {
-  type DrizzleMdPg,
-  drizzleMd,
-  findDrizzleMdError,
-  isDrizzleMdError,
-} from '../src/pg/index.js';
+import { type DrizzleMdPg, drizzleMd, findMdqlError, isMdqlError } from '../src/pg/index.js';
 import { copyFixture, fixture, nextEvent } from './helpers.js';
 import { authors, pgSchema, posts } from './pg-schema.js';
 
@@ -28,7 +23,7 @@ const caught = <T>(promise: PromiseLike<T>): Promise<Error | undefined> =>
     (error: Error) => error,
   );
 
-describe('drizzle-md/pg loading', () => {
+describe('mdql/pg loading', () => {
   let md: DrizzleMdPg<typeof pgSchema>;
 
   beforeAll(async () => {
@@ -123,7 +118,7 @@ describe('drizzle-md/pg loading', () => {
   });
 });
 
-describe('drizzle-md/pg read-only', () => {
+describe('mdql/pg read-only', () => {
   let md: DrizzleMdPg<typeof pgSchema>;
 
   beforeAll(async () => {
@@ -136,8 +131,8 @@ describe('drizzle-md/pg read-only', () => {
 
   const expectReadOnly = async (query: PromiseLike<object>) => {
     const error = await caught(query);
-    expect(isDrizzleMdError(error, 'READ_ONLY')).toBe(true);
-    expect(findDrizzleMdError(error)?.message).toContain('read-only');
+    expect(isMdqlError(error, 'READ_ONLY')).toBe(true);
+    expect(findMdqlError(error)?.message).toContain('read-only');
   };
 
   it('rejects inserts, updates and deletes', async () => {
@@ -183,13 +178,13 @@ describe('drizzle-md/pg read-only', () => {
     await closing.close();
     await closing.close();
     const error = await caught(closing.db.select().from(posts));
-    expect(isDrizzleMdError(error, 'CLOSED')).toBe(true);
+    expect(isMdqlError(error, 'CLOSED')).toBe(true);
     const liveError = await caught(closing.live(closing.db.select().from(posts), () => undefined));
-    expect(isDrizzleMdError(liveError, 'CLOSED')).toBe(true);
+    expect(isMdqlError(liveError, 'CLOSED')).toBe(true);
   });
 });
 
-describe('drizzle-md/pg watcher and live queries', () => {
+describe('mdql/pg watcher and live queries', () => {
   it('applies file changes and re-runs live queries', async () => {
     const { root, cleanup } = await copyFixture('content');
     const md = await drizzleMd({
@@ -252,7 +247,7 @@ describe('drizzle-md/pg watcher and live queries', () => {
     const md = await drizzleMd({ root: fixture('content'), schema: pgSchema });
     try {
       const error = await caught(md.live(md.db.delete(posts).returning(), () => undefined));
-      expect(isDrizzleMdError(error, 'READ_ONLY')).toBe(true);
+      expect(isMdqlError(error, 'READ_ONLY')).toBe(true);
     } finally {
       await md.close();
     }
@@ -267,7 +262,7 @@ describe('drizzle-md/pg watcher and live queries', () => {
   });
 });
 
-describe('drizzle-md/pg loading paths and setup', () => {
+describe('mdql/pg loading paths and setup', () => {
   it('falls back to one file at a time when COPY rejects a row', async () => {
     const { root, cleanup } = await copyFixture('content');
     try {
@@ -292,7 +287,7 @@ describe('drizzle-md/pg loading paths and setup', () => {
 
   it('rejects invalid files on the first load by default', async () => {
     const error = await caught(drizzleMd({ root: fixture('invalid'), schema: pgSchema }));
-    expect(isDrizzleMdError(error, 'VALIDATION')).toBe(true);
+    expect(isMdqlError(error, 'VALIDATION')).toBe(true);
   });
 
   it('runs setup SQL with PGlite extensions, e.g. pg_trgm and GIN indexes', async () => {
@@ -324,7 +319,7 @@ describe('drizzle-md/pg loading paths and setup', () => {
   });
 
   it('accepts integer keys, enum arrays and bigint values', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'drizzle-md-pg-'));
+    const root = await mkdtemp(join(tmpdir(), 'mdql-pg-'));
     try {
       await mkdir(join(root, 'numbered'));
       await writeFile(
@@ -364,10 +359,10 @@ const numbered = pgTable('numbered', {
   body: text(),
 });
 
-describe('drizzle-md/pg config', () => {
+describe('mdql/pg config', () => {
   it('needs Postgres tables', async () => {
     const error = await caught(drizzleMd({ root: fixture('content'), schema: {} }));
-    expect(isDrizzleMdError(error, 'CONFIG')).toBe(true);
+    expect(isMdqlError(error, 'CONFIG')).toBe(true);
     expect(error?.message).toContain('no Drizzle Postgres tables');
   });
 
@@ -375,10 +370,10 @@ describe('drizzle-md/pg config', () => {
     const content = pgNamespace('content');
     const scoped = content.table('posts', { id: text().primaryKey() });
     const tableError = await caught(drizzleMd({ root: fixture('content'), schema: { scoped } }));
-    expect(isDrizzleMdError(tableError, 'CONFIG')).toBe(true);
+    expect(isMdqlError(tableError, 'CONFIG')).toBe(true);
     const mood = content.enum('mood', ['happy']);
     const moods = pgTable('moods', { id: text().primaryKey(), mood: mood() });
     const enumError = await caught(drizzleMd({ root: fixture('content'), schema: { moods } }));
-    expect(isDrizzleMdError(enumError, 'CONFIG')).toBe(true);
+    expect(isMdqlError(enumError, 'CONFIG')).toBe(true);
   });
 });

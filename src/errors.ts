@@ -24,11 +24,11 @@ export interface Diagnostic {
   readonly message: string;
 }
 
-export type DrizzleMdErrorCode = 'READ_ONLY' | 'VALIDATION' | 'CONFIG' | 'CLOSED';
+export type MdqlErrorCode = 'READ_ONLY' | 'VALIDATION' | 'CONFIG' | 'CLOSED';
 
-export interface DrizzleMdError extends Error {
-  readonly name: 'DrizzleMdError';
-  readonly code: DrizzleMdErrorCode;
+export interface MdqlError extends Error {
+  readonly name: 'MdqlError';
+  readonly code: MdqlErrorCode;
   readonly diagnostics: readonly Diagnostic[];
 }
 
@@ -37,15 +37,15 @@ interface ErrorExtras {
   readonly cause?: Error;
 }
 
-export const createDrizzleMdError = (
-  code: DrizzleMdErrorCode,
+export const createMdqlError = (
+  code: MdqlErrorCode,
   message: string,
   extras: ErrorExtras = {},
-): DrizzleMdError =>
+): MdqlError =>
   Object.assign(
     new Error(message, extras.cause === undefined ? undefined : { cause: extras.cause }),
     {
-      name: 'DrizzleMdError' as const,
+      name: 'MdqlError' as const,
       code,
       diagnostics: extras.diagnostics ?? [],
     },
@@ -53,9 +53,9 @@ export const createDrizzleMdError = (
 
 const ERROR_CODES: readonly string[] = ['READ_ONLY', 'VALIDATION', 'CONFIG', 'CLOSED'];
 
-const isOwnError = <T>(error: T): error is T & DrizzleMdError =>
+const isOwnError = <T>(error: T): error is T & MdqlError =>
   error instanceof Error &&
-  error.name === 'DrizzleMdError' &&
+  error.name === 'MdqlError' &&
   'code' in error &&
   typeof error.code === 'string' &&
   ERROR_CODES.includes(error.code) &&
@@ -63,21 +63,21 @@ const isOwnError = <T>(error: T): error is T & DrizzleMdError =>
   Array.isArray(error.diagnostics);
 
 /**
- * Finds a drizzle-md error in `error` or its `cause` chain. Drizzle wraps errors thrown while
+ * Finds a mdql error in `error` or its `cause` chain. Drizzle wraps errors thrown while
  * running a query in its own `DrizzleQueryError`, so check the chain rather than the top error.
  */
-export const findDrizzleMdError = <T>(error: T): DrizzleMdError | undefined => {
+export const findMdqlError = <T>(error: T): MdqlError | undefined => {
   if (isOwnError(error)) {
     return error;
   }
   if (error instanceof Error && error.cause !== undefined) {
-    return findDrizzleMdError(error.cause);
+    return findMdqlError(error.cause);
   }
   return undefined;
 };
 
-export const isDrizzleMdError = <T>(error: T, code?: DrizzleMdErrorCode): boolean => {
-  const found = findDrizzleMdError(error);
+export const isMdqlError = <T>(error: T, code?: MdqlErrorCode): boolean => {
+  const found = findMdqlError(error);
   return found !== undefined && (code === undefined || found.code === code);
 };
 
