@@ -6,11 +6,11 @@
   "author": "Atsushi Sakashita <ats@saks.industries>",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/asakaxgit/drizzle-md.git"
+    "url": "git+https://github.com/asakaxgit/markdown-sql.git"
   },
-  "homepage": "https://github.com/asakaxgit/drizzle-md#readme",
+  "homepage": "https://github.com/asakaxgit/markdown-sql#readme",
   "bugs": {
-    "url": "https://github.com/asakaxgit/drizzle-md/issues"
+    "url": "https://github.com/asakaxgit/markdown-sql/issues"
   },
   "keywords": [
     "markdown",
