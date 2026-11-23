@@ -111,6 +111,15 @@ describe('watcher', () => {
   });
 
   it('debounces bursts of writes into one update', async () => {
+    // 20 ms is too tight on a loaded CI runner: sequential writeFile calls can
+    // land more than a debounce window apart, so this test uses a longer window.
+    await md.close();
+    md = await drizzleMd({
+      root,
+      schema,
+      watch: { debounceMs: 250, persistent: false },
+      onDiagnostic: (d) => diagnostics.push(d),
+    });
     const events: string[] = [];
     md.subscribe((batch) => events.push(...batch.map((e) => `${e.type}:${e.key}`)));
     const settledOnLast = nextEvent(md, (e) => e.key === 'burst');
@@ -118,10 +127,12 @@ describe('watcher', () => {
       await writeFile(join(root, 'posts/burst.md'), post(`Burst ${n}`));
     }
     await settledOnLast;
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await md.settled();
+    // Wait longer than the debounce window so a late trailing event would be counted.
+    await new Promise((resolve) => setTimeout(resolve, 300));
     await md.settled();
     expect(await titleOf('burst')).toBe('Burst 5');
-    expect(events.filter((e) => e.endsWith(':burst')).length).toBeLessThanOrEqual(2);
+    expect(events.filter((e) => e.endsWith(':burst'))).toEqual(['add:burst']);
   });
 
   it('stops after close()', async () => {
