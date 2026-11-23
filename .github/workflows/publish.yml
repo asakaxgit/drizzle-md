@@ -32,8 +32,8 @@ jobs:
       - name: Check tag matches package version
         run: |
           pkg="$(node -p 'require("./package.json").version')"
-          # v0.1.0 already exists from the drizzle-md release, so sqlmd- prefixed tags (sqlmd-v0.1.0) work too.
-          tag="${GITHUB_REF_NAME#sqlmd-}"
+          # v0.1.0 already exists from the drizzle-md release, so markdown-sql- prefixed tags (markdown-sql-v0.1.0) work too.
+          tag="${GITHUB_REF_NAME#markdown-sql-}"
           tag="${tag#v}"
           if [ "$pkg" != "$tag" ]; then
             echo "package.json is $pkg but the release tag is $tag" >&2

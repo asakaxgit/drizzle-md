@@ -3,13 +3,13 @@ import { readdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { toSqlParam } from './coerce.js';
 import {
-  buildSqlmdModel,
+  buildMarkdownSqlModel,
   type ColumnDefinition,
   type ColumnType,
   inferColumns,
-  type SqlmdTableOptions,
+  type MarkdownSqlTableOptions,
 } from './columns.js';
-import { type BaseOptions, openIndex, type SqlmdIndex } from './core.js';
+import { type BaseOptions, type MarkdownSqlIndex, openIndex } from './core.js';
 import {
   createSqliteBackend,
   type Driver,
@@ -18,25 +18,25 @@ import {
   type SqlParam,
   type SqlValue,
 } from './engine.js';
-import { createSqlmdError, findSqlmdError } from './errors.js';
+import { createMarkdownSqlError, findMarkdownSqlError } from './errors.js';
 import type { ColumnRole, TableModel } from './model.js';
 import { closedError, READ_STATEMENT, readOnlyError } from './read-only.js';
 
-export interface SqlmdOptions extends BaseOptions {
+export interface MarkdownSqlOptions extends BaseOptions {
   /**
    * Tables by SQL name. Left out, every sub-folder of `root` (except ones starting with `.` or
    * `_`) is a table named after the folder, with columns inferred from its files.
    */
-  readonly tables?: Readonly<Record<string, SqlmdTableOptions>>;
+  readonly tables?: Readonly<Record<string, MarkdownSqlTableOptions>>;
   /** SQLite driver for the in-memory index. Defaults to `better-sqlite3`. */
   readonly driver?: Driver;
 }
 
 /** A value bound to a `?` placeholder. Booleans are bound as `1` and `0`. */
-export type SqlmdParam = SqlParam | boolean;
+export type MarkdownSqlParam = SqlParam | boolean;
 
 /** One result row, keyed by result column name. When two columns share a name, the last wins. */
-export interface SqlmdRow {
+export interface MarkdownSqlRow {
   readonly [column: string]: SqlValue;
 }
 
@@ -53,12 +53,15 @@ export interface TableInfo {
   readonly columns: readonly ColumnInfo[];
 }
 
-export interface Sqlmd extends SqlmdIndex {
+export interface MarkdownSql extends MarkdownSqlIndex {
   /**
    * Runs one read-only SQL statement (`SELECT`, `WITH`, `VALUES` or `EXPLAIN`) with `?`
    * parameters and returns its rows.
    */
-  readonly query: (sql: string, params?: readonly SqlmdParam[]) => Promise<readonly SqlmdRow[]>;
+  readonly query: (
+    sql: string,
+    params?: readonly MarkdownSqlParam[],
+  ) => Promise<readonly MarkdownSqlRow[]>;
   /**
    * Tagged-template form of `query`: every `${value}` becomes a bound parameter, never SQL text.
    *
@@ -67,8 +70,8 @@ export interface Sqlmd extends SqlmdIndex {
    */
   readonly sql: (
     strings: TemplateStringsArray,
-    ...values: readonly SqlmdParam[]
-  ) => Promise<readonly SqlmdRow[]>;
+    ...values: readonly MarkdownSqlParam[]
+  ) => Promise<readonly MarkdownSqlRow[]>;
   /** The tables and columns of the index, including inferred ones. */
   readonly tables: () => readonly TableInfo[];
 }
@@ -78,12 +81,12 @@ const isSqliteReadOnlyError = <T>(error: T): error is T & Error =>
 
 const discoverTables = async (
   root: string,
-): Promise<Readonly<Record<string, SqlmdTableOptions>>> => {
+): Promise<Readonly<Record<string, MarkdownSqlTableOptions>>> => {
   let entries: Dirent[];
   try {
     entries = await readdir(root, { withFileTypes: true });
   } catch (error) {
-    throw createSqlmdError(
+    throw createMarkdownSqlError(
       'CONFIG',
       `Cannot read the root folder ${root}: ${error instanceof Error ? error.message : String(error)}`,
       error instanceof Error ? { cause: error } : {},
@@ -94,18 +97,18 @@ const discoverTables = async (
     .map((entry) => entry.name)
     .sort((a, b) => a.localeCompare(b));
   if (tables.length === 0) {
-    throw createSqlmdError('CONFIG', `The root folder ${root} has no table folders.`);
+    throw createMarkdownSqlError('CONFIG', `The root folder ${root} has no table folders.`);
   }
   return Object.fromEntries(tables.map((table) => [table, {}]));
 };
 
-const buildModels = async (options: SqlmdOptions): Promise<readonly TableModel[]> => {
+const buildModels = async (options: MarkdownSqlOptions): Promise<readonly TableModel[]> => {
   const root = resolve(options.root);
   const tables = options.tables ?? (await discoverTables(root));
   const extensions = options.extensions ?? ['.md'];
   const entries = Object.entries(tables);
   if (entries.length === 0) {
-    throw createSqlmdError('CONFIG', 'tables is empty: declare at least one table.');
+    throw createMarkdownSqlError('CONFIG', 'tables is empty: declare at least one table.');
   }
   const models: TableModel[] = [];
   for (const [table, tableOptions] of entries) {
@@ -116,7 +119,7 @@ const buildModels = async (options: SqlmdOptions): Promise<readonly TableModel[]
     const columns =
       tableOptions.columns ??
       (await inferColumns(join(root, tableOptions.dir ?? table), extensions, reserved));
-    models.push(buildSqlmdModel(table, tableOptions, columns));
+    models.push(buildMarkdownSqlModel(table, tableOptions, columns));
   }
   return models;
 };
@@ -141,18 +144,22 @@ const tableInfo = (model: TableModel): TableInfo => ({
   })),
 });
 
-const runQuery = (engine: Engine, statement: string, params: readonly SqlmdParam[]): SqlmdRow[] => {
+const runQuery = (
+  engine: Engine,
+  statement: string,
+  params: readonly MarkdownSqlParam[],
+): MarkdownSqlRow[] => {
   if (!READ_STATEMENT.test(statement)) {
     throw readOnlyError(statement);
   }
   try {
     const result = engine.table(statement, params.map(toSqlParam));
     return result.rows.map(
-      (row): SqlmdRow =>
+      (row): MarkdownSqlRow =>
         Object.fromEntries(result.columns.map((column, index) => [column, row[index] ?? null])),
     );
   } catch (error) {
-    if (isSqliteReadOnlyError(error) && findSqlmdError(error) === undefined) {
+    if (isSqliteReadOnlyError(error) && findMarkdownSqlError(error) === undefined) {
       throw readOnlyError(statement, error);
     }
     throw error;
@@ -164,13 +171,13 @@ const runQuery = (engine: Engine, statement: string, params: readonly SqlmdParam
  * read-only SQL. No ORM needed: tables come from the folders and columns from the frontmatter,
  * inferred or declared in `tables`.
  *
- * For Drizzle, import `drizzleMd` from `sqlmd/drizzle` (SQLite) or `sqlmd/pg` (PGlite) instead.
+ * For Drizzle, import `drizzleMd` from `markdown-sql/drizzle` (SQLite) or `markdown-sql/pg` (PGlite) instead.
  *
  * @example
- * const md = await sqlmd({ root: 'content' });
+ * const md = await markdownSql({ root: 'content' });
  * const posts = await md.sql`select id, title from posts where draft = ${false} order by id`;
  */
-export const sqlmd = async (options: SqlmdOptions): Promise<Sqlmd> => {
+export const markdownSql = async (options: MarkdownSqlOptions): Promise<MarkdownSql> => {
   const models = await buildModels(options);
   const engine = await openEngine(options.driver ?? 'better-sqlite3');
   try {
@@ -192,7 +199,7 @@ export const sqlmd = async (options: SqlmdOptions): Promise<Sqlmd> => {
     },
   });
 
-  const query = async (statement: string, params: readonly SqlmdParam[] = []) => {
+  const query = async (statement: string, params: readonly MarkdownSqlParam[] = []) => {
     if (index.isClosed()) {
       throw closedError();
     }
@@ -209,4 +216,4 @@ export const sqlmd = async (options: SqlmdOptions): Promise<Sqlmd> => {
   };
 };
 
-export type { ColumnDefinition, ColumnType, SqlmdTableOptions };
+export type { ColumnDefinition, ColumnType, MarkdownSqlTableOptions };

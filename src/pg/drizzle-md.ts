@@ -3,16 +3,16 @@ import { live as liveExtension } from '@electric-sql/pglite/live';
 import type { Query } from 'drizzle-orm';
 import type { PgTable } from 'drizzle-orm/pg-core';
 import { drizzle, type PgRemoteDatabase, type RemoteCallback } from 'drizzle-orm/pg-proxy';
-import { type BaseOptions, openIndex, type SqlmdIndex } from '../core.js';
+import { type BaseOptions, type MarkdownSqlIndex, openIndex } from '../core.js';
 import { buildModels, type TablesOptions } from '../drizzle/schema.js';
-import { createSqlmdError, findSqlmdError } from '../errors.js';
+import { createMarkdownSqlError, findMarkdownSqlError } from '../errors.js';
 import { closedError, READ_STATEMENT, readOnlyError } from '../read-only.js';
 import { createPgliteBackend } from './backend.js';
 import { type IndexStatement, indexDdl } from './indexes.js';
 import { enumDdl, pgDialect } from './schema.js';
 import { chooseSnapshot } from './snapshot.js';
 
-/** PGlite settings sqlmd passes through. The data directory is always in memory. */
+/** PGlite settings MarkdownSQL passes through. The data directory is always in memory. */
 export type PgliteOptions = Omit<PGliteOptions, 'dataDir' | 'loadDataDir'>;
 
 export interface DrizzleMdPgOptions<TSchema extends Record<string, object>> extends BaseOptions {
@@ -39,7 +39,7 @@ export interface DrizzleMdPgOptions<TSchema extends Record<string, object>> exte
   /**
    * SQL run once as the database owner after the tables are created and before any file is
    * loaded, e.g. `CREATE EXTENSION pg_trgm`. Indexes declared in the `pgTable`s are created by
-   * sqlmd itself, after this runs. Tables it creates are readable by queries too.
+   * MarkdownSQL itself, after this runs. Tables it creates are readable by queries too.
    *
    * **Trusted startup code.** It runs with full database rights, outside the read-only guard. Write
    * it yourself, like a migration; never build it from user input, request data, file contents
@@ -58,7 +58,7 @@ export interface LiveSubscription {
   readonly unsubscribe: () => Promise<void>;
 }
 
-export interface DrizzleMdPg<TSchema extends Record<string, object>> extends SqlmdIndex {
+export interface DrizzleMdPg<TSchema extends Record<string, object>> extends MarkdownSqlIndex {
   /** A read-only Drizzle database over the markdown files. */
   readonly db: PgRemoteDatabase<TSchema>;
   /**
@@ -98,11 +98,11 @@ const toError = <T>(error: T): Error => (error instanceof Error ? error : new Er
  * Loads folders of markdown files into an in-memory PGlite (Postgres in WebAssembly) database and
  * returns a read-only Drizzle database over them.
  *
- * Same name and options as `drizzleMd` from `sqlmd/drizzle`: the import path picks the engine
- * (`sqlmd/drizzle` for SQLite, `sqlmd/pg` for PGlite).
+ * Same name and options as `drizzleMd` from `markdown-sql/drizzle`: the import path picks the engine
+ * (`markdown-sql/drizzle` for SQLite, `markdown-sql/pg` for PGlite).
  *
  * @example
- * import { drizzleMd } from 'sqlmd/pg';
+ * import { drizzleMd } from 'markdown-sql/pg';
  * const md = await drizzleMd({ root: 'content', schema: { posts, authors } });
  * const rows = await md.db.select().from(posts).where(arrayContains(posts.tags, ['drizzle']));
  */
@@ -134,7 +134,7 @@ export const drizzleMd = async <TSchema extends Record<string, object>>(
       try {
         await client.exec(statement.sql);
       } catch (error) {
-        throw createSqlmdError(
+        throw createMarkdownSqlError(
           'CONFIG',
           `Table "${statement.table}", index ${statement.label} could not be created: ${error instanceof Error ? error.message : String(error)}`,
           error instanceof Error ? { cause: error } : {},
@@ -209,7 +209,7 @@ export const drizzleMd = async <TSchema extends Record<string, object>>(
       });
       return { rows };
     } catch (error) {
-      if (isPgReadOnlyError(error) && findSqlmdError(error) === undefined) {
+      if (isPgReadOnlyError(error) && findMarkdownSqlError(error) === undefined) {
         throw readOnlyError(statement, error);
       }
       throw error;

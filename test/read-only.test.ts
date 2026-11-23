@@ -1,6 +1,11 @@
 import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { type DrizzleMd, drizzleMd, findSqlmdError, isSqlmdError } from '../src/drizzle/index.js';
+import {
+  type DrizzleMd,
+  drizzleMd,
+  findMarkdownSqlError,
+  isMarkdownSqlError,
+} from '../src/drizzle/index.js';
 import { fixture } from './helpers.js';
 import { posts, schema } from './schema.js';
 
@@ -20,8 +25,8 @@ describe.each(['better-sqlite3', 'node:sqlite'] as const)('read-only with %s', (
       () => undefined,
       (caught: Error) => caught,
     );
-    expect(isSqlmdError(error, 'READ_ONLY')).toBe(true);
-    expect(findSqlmdError(error)?.message).toContain('read-only');
+    expect(isMarkdownSqlError(error, 'READ_ONLY')).toBe(true);
+    expect(findMarkdownSqlError(error)?.message).toContain('read-only');
   };
 
   it('rejects inserts, updates and deletes', async () => {
@@ -67,7 +72,7 @@ describe('closed instance', () => {
         () => undefined,
         (caught: Error) => caught,
       );
-    expect(isSqlmdError(error, 'CLOSED')).toBe(true);
-    expect(isSqlmdError(new Error('other'))).toBe(false);
+    expect(isMarkdownSqlError(error, 'CLOSED')).toBe(true);
+    expect(isMarkdownSqlError(new Error('other'))).toBe(false);
   });
 });

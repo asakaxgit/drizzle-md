@@ -3,7 +3,7 @@ import type { RowValues } from '../coerce.js';
 import { quoteIdentifier, type TableModel } from '../model.js';
 import type { IndexBackend } from '../store.js';
 
-/** Values sqlmd binds to a PGlite statement or writes to a COPY stream. */
+/** Values MarkdownSQL binds to a PGlite statement or writes to a COPY stream. */
 export type PgParam = string | number | boolean | null | Uint8Array;
 
 /** Narrows whatever a Drizzle pg column's `mapToDriverValue` returned to a bindable value. */
@@ -71,7 +71,7 @@ const byColumns = (rows: readonly RowValues<PgParam>[]): RowGroup[] => {
 };
 
 /**
- * The PGlite index. sqlmd writes as the session's superuser in its own transaction; PGlite
+ * The PGlite index. MarkdownSQL writes as the session's superuser in its own transaction; PGlite
  * runs transactions one at a time, so writes never interleave with a user query.
  */
 export const createPgliteBackend = (client: PGlite): IndexBackend<PgParam> => {

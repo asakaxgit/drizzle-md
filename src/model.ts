@@ -41,7 +41,7 @@ export interface RowContext<TParam> {
 
 /**
  * Everything the loader needs to know about one column, independent of Drizzle. The core builds
- * these from sqlmd column types; `sqlmd/drizzle` and `sqlmd/pg` build them from Drizzle columns.
+ * these from MarkdownSQL column types; `markdown-sql/drizzle` and `markdown-sql/pg` build them from Drizzle columns.
  */
 export interface ColumnSpec {
   readonly kind: ValueKind;
@@ -61,7 +61,7 @@ export interface ColumnSpec {
 }
 
 export interface ColumnModel {
-  /** Frontmatter key (the Drizzle property name, or the sqlmd column name). */
+  /** Frontmatter key (the Drizzle property name, or the MarkdownSQL column name). */
   readonly key: string;
   /** SQL column name. */
   readonly name: string;

@@ -15,7 +15,7 @@ const readVersion = async (file: string, name: string): Promise<string | undefin
 };
 
 /**
- * The installed version of package `name`, as resolved from sqlmd itself, or undefined when
+ * The installed version of package `name`, as resolved from MarkdownSQL itself, or undefined when
  * it is not installed. Packages that don't export `package.json` are found by walking up from
  * their resolved entry file.
  */

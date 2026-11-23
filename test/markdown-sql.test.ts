@@ -2,14 +2,19 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { findSqlmdError, isSqlmdError, type Sqlmd, sqlmd } from '../src/index.js';
+import {
+  findMarkdownSqlError,
+  isMarkdownSqlError,
+  type MarkdownSql,
+  markdownSql,
+} from '../src/index.js';
 import { copyFixture, fixture, nextEvent } from './helpers.js';
 
-describe('sqlmd with inferred tables and columns', () => {
-  let md: Sqlmd;
+describe('MarkdownSQL with inferred tables and columns', () => {
+  let md: MarkdownSql;
 
   beforeAll(async () => {
-    md = await sqlmd({ root: fixture('content') });
+    md = await markdownSql({ root: fixture('content') });
   });
 
   afterAll(async () => {
@@ -82,11 +87,11 @@ describe('sqlmd with inferred tables and columns', () => {
 
   it('rejects writes as READ_ONLY', async () => {
     await expect(md.query("delete from posts where id = 'hello-world'")).rejects.toSatisfy(
-      (error: Error) => isSqlmdError(error, 'READ_ONLY'),
+      (error: Error) => isMarkdownSqlError(error, 'READ_ONLY'),
     );
     await expect(
       md.query("with gone as (select 1) delete from posts where id = 'hello-world'"),
-    ).rejects.toSatisfy((error: Error) => isSqlmdError(error, 'READ_ONLY'));
+    ).rejects.toSatisfy((error: Error) => isMarkdownSqlError(error, 'READ_ONLY'));
     expect(await md.query('select count(*) as n from posts')).toEqual([{ n: 3 }]);
   });
 
@@ -101,9 +106,9 @@ describe('sqlmd with inferred tables and columns', () => {
   });
 });
 
-describe('sqlmd with declared tables', () => {
+describe('MarkdownSQL with declared tables', () => {
   it('uses declared columns, folders, keys and bodies', async () => {
-    const md = await sqlmd({
+    const md = await markdownSql({
       root: fixture('content'),
       tables: {
         articles: {
@@ -145,7 +150,7 @@ describe('sqlmd with declared tables', () => {
   });
 
   it('reports files that do not match declared columns', async () => {
-    const md = await sqlmd({
+    const md = await markdownSql({
       root: fixture('invalid'),
       onInvalid: 'skip',
       tables: { posts: { columns: { title: { type: 'text', required: true }, views: 'integer' } } },
@@ -168,18 +173,18 @@ describe('sqlmd with declared tables', () => {
   });
 
   it('rejects invalid files on the first load by default', async () => {
-    const error = await sqlmd({ root: fixture('invalid') }).catch((caught: Error) => caught);
-    expect(findSqlmdError(error)?.code).toBe('VALIDATION');
+    const error = await markdownSql({ root: fixture('invalid') }).catch((caught: Error) => caught);
+    expect(findMarkdownSqlError(error)?.code).toBe('VALIDATION');
   });
 
   it('works with the node:sqlite driver', async () => {
-    const md = await sqlmd({ root: fixture('content'), driver: 'node:sqlite' });
+    const md = await markdownSql({ root: fixture('content'), driver: 'node:sqlite' });
     try {
       expect(await md.sql`select name from authors where email is ${null}`).toEqual([
         { name: 'Grace Hopper' },
       ]);
       await expect(md.query('drop table authors')).rejects.toSatisfy((error: Error) =>
-        isSqlmdError(error, 'READ_ONLY'),
+        isMarkdownSqlError(error, 'READ_ONLY'),
       );
     } finally {
       await md.close();
@@ -187,7 +192,7 @@ describe('sqlmd with declared tables', () => {
   });
 });
 
-describe('sqlmd lifecycle', () => {
+describe('MarkdownSQL lifecycle', () => {
   let cleanup: (() => Promise<void>) | undefined;
 
   afterEach(async () => {
@@ -198,7 +203,7 @@ describe('sqlmd lifecycle', () => {
   it('applies file changes while watching', async () => {
     const copy = await copyFixture('content');
     cleanup = copy.cleanup;
-    const md = await sqlmd({ root: copy.root, watch: { debounceMs: 20 } });
+    const md = await markdownSql({ root: copy.root, watch: { debounceMs: 20 } });
     try {
       const added = nextEvent(md, (event) => event.key === 'third');
       await writeFile(
@@ -216,20 +221,20 @@ describe('sqlmd lifecycle', () => {
   });
 
   it('rejects queries after close()', async () => {
-    const md = await sqlmd({ root: fixture('content') });
+    const md = await markdownSql({ root: fixture('content') });
     await md.close();
     await md.close();
     await expect(md.query('select 1')).rejects.toSatisfy((error: Error) =>
-      isSqlmdError(error, 'CLOSED'),
+      isMarkdownSqlError(error, 'CLOSED'),
     );
   });
 });
 
-describe('sqlmd config', () => {
+describe('MarkdownSQL config', () => {
   let root: string;
 
   beforeAll(async () => {
-    root = await mkdtemp(join(tmpdir(), 'sqlmd-core-'));
+    root = await mkdtemp(join(tmpdir(), 'markdown-sql-core-'));
     await mkdir(join(root, 'notes'));
     await mkdir(join(root, '.git'));
     await mkdir(join(root, '_drafts'));
@@ -243,16 +248,16 @@ describe('sqlmd config', () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  const configError = async (promise: Promise<Sqlmd>): Promise<string | undefined> => {
+  const configError = async (promise: Promise<MarkdownSql>): Promise<string | undefined> => {
     const error = await promise.then(
       () => undefined,
       (caught: Error) => caught,
     );
-    return findSqlmdError(error)?.code === 'CONFIG' ? error?.message : undefined;
+    return findMarkdownSqlError(error)?.code === 'CONFIG' ? error?.message : undefined;
   };
 
   it('skips folders starting with . or _ and widens mixed column types', async () => {
-    const md = await sqlmd({ root });
+    const md = await markdownSql({ root });
     try {
       expect(md.tables().map((table) => table.table)).toEqual(['notes']);
       expect(md.tables()[0]?.columns.map((column) => [column.name, column.type])).toEqual([
@@ -273,7 +278,7 @@ describe('sqlmd config', () => {
   });
 
   it('treats a declared table with a missing folder as empty', async () => {
-    const md = await sqlmd({ root, tables: { missing: {} } });
+    const md = await markdownSql({ root, tables: { missing: {} } });
     try {
       expect(await md.query('select count(*) as n from missing')).toEqual([{ n: 0 }]);
     } finally {
@@ -282,12 +287,14 @@ describe('sqlmd config', () => {
   });
 
   it('rejects bad configuration as CONFIG errors', async () => {
-    expect(await configError(sqlmd({ root: join(root, 'nope') }))).toMatch(/Cannot read/);
-    expect(await configError(sqlmd({ root: join(root, '_drafts') }))).toMatch(/no table folders/);
-    expect(await configError(sqlmd({ root, tables: {} }))).toMatch(/tables is empty/);
+    expect(await configError(markdownSql({ root: join(root, 'nope') }))).toMatch(/Cannot read/);
+    expect(await configError(markdownSql({ root: join(root, '_drafts') }))).toMatch(
+      /no table folders/,
+    );
+    expect(await configError(markdownSql({ root, tables: {} }))).toMatch(/tables is empty/);
     expect(
       await configError(
-        sqlmd({
+        markdownSql({
           root,
           tables: { notes: { columns: { n: { type: 'text', values: ['a'] }, x: 'real' } } },
         }),
@@ -295,23 +302,26 @@ describe('sqlmd config', () => {
     ).toBeUndefined();
     expect(
       await configError(
-        sqlmd({ root, tables: { notes: { columns: { n: { type: 'real', values: ['a'] } } } } }),
+        markdownSql({
+          root,
+          tables: { notes: { columns: { n: { type: 'real', values: ['a'] } } } },
+        }),
       ),
     ).toMatch(/only allowed on text/);
     expect(
       await configError(
         // A JavaScript caller can pass any string; the type check is at runtime too.
-        sqlmd({ root, tables: { notes: { columns: JSON.parse('{"n":"float"}') } } }),
+        markdownSql({ root, tables: { notes: { columns: JSON.parse('{"n":"float"}') } } }),
       ),
     ).toMatch(/unknown type "float"/);
-    expect(await configError(sqlmd({ root, tables: { notes: { key: 'x', body: 'x' } } }))).toMatch(
-      /cannot both be/,
-    );
     expect(
-      await configError(sqlmd({ root, tables: { notes: { columns: { id: 'text' } } } })),
+      await configError(markdownSql({ root, tables: { notes: { key: 'x', body: 'x' } } })),
+    ).toMatch(/cannot both be/);
+    expect(
+      await configError(markdownSql({ root, tables: { notes: { columns: { id: 'text' } } } })),
     ).toMatch(/already the key column/);
     expect(
-      await configError(sqlmd({ root, tables: { notes: { columns: { body: 'text' } } } })),
+      await configError(markdownSql({ root, tables: { notes: { columns: { body: 'text' } } } })),
     ).toMatch(/already the body column/);
   });
 });

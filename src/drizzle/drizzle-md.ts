@@ -4,9 +4,9 @@ import {
   type SqliteRemoteDatabase,
 } from 'drizzle-orm/sqlite-proxy';
 import { toSqlParam } from '../coerce.js';
-import { type BaseOptions, openIndex, type SqlmdIndex } from '../core.js';
+import { type BaseOptions, type MarkdownSqlIndex, openIndex } from '../core.js';
 import { createSqliteBackend, type Driver, openEngine, type SqlRow } from '../engine.js';
-import { findSqlmdError } from '../errors.js';
+import { findMarkdownSqlError } from '../errors.js';
 import { closedError, READ_STATEMENT, readOnlyError } from '../read-only.js';
 import { buildModels, sqliteDialect, type TablesOptions } from './schema.js';
 
@@ -24,7 +24,7 @@ export interface DrizzleMdOptions<TSchema extends Record<string, object>> extend
   readonly driver?: Driver;
 }
 
-export interface DrizzleMd<TSchema extends Record<string, object>> extends SqlmdIndex {
+export interface DrizzleMd<TSchema extends Record<string, object>> extends MarkdownSqlIndex {
   /** A read-only Drizzle database over the markdown files. */
   readonly db: SqliteRemoteDatabase<TSchema>;
 }
@@ -36,11 +36,11 @@ const isSqliteReadOnlyError = <T>(error: T): error is T & Error =>
  * Loads folders of markdown files into an in-memory SQLite database and returns a read-only
  * Drizzle database over them.
  *
- * For Postgres, import the function of the same name from `sqlmd/pg` instead: the import path
- * picks the engine. For queries without Drizzle, use `sqlmd` from `sqlmd`.
+ * For Postgres, import the function of the same name from `markdown-sql/pg` instead: the import path
+ * picks the engine. For queries without Drizzle, use `markdown-sql` from `markdown-sql`.
  *
  * @example
- * import { drizzleMd } from 'sqlmd/drizzle';
+ * import { drizzleMd } from 'markdown-sql/drizzle';
  * const md = await drizzleMd({ root: 'content', schema: { posts, authors } });
  * const rows = await md.db.select().from(posts).where(eq(posts.draft, false));
  */
@@ -79,7 +79,7 @@ export const drizzleMd = async <TSchema extends Record<string, object>>(
     try {
       rows = engine.rows(statement, params.map(toSqlParam));
     } catch (error) {
-      if (isSqliteReadOnlyError(error) && findSqlmdError(error) === undefined) {
+      if (isSqliteReadOnlyError(error) && findMarkdownSqlError(error) === undefined) {
         throw readOnlyError(statement, error);
       }
       throw error;

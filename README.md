@@ -1,24 +1,24 @@
-# sqlmd
+# MarkdownSQL
 
 Query folders of markdown files with SQL. Each folder is a table, each `.md` file is a row, YAML frontmatter holds the columns, the file name is the key and the markdown body is one more column.
 
-sqlmd reads the files into an in-memory SQLite database and gives you read-only SQL over it: no ORM, no schema file, no build step. An optional file watcher keeps the index in sync while you edit.
+MarkdownSQL reads the files into an in-memory SQLite database and gives you read-only SQL over it: no ORM, no schema file, no build step. An optional file watcher keeps the index in sync while you edit.
 
 - **Zero config:** every sub-folder is a table and its columns are inferred from the frontmatter, or declare them with a few type names.
 - Full SQLite `SELECT`: joins across folders, aggregates, window functions and `json_each` over YAML lists.
 - File watcher with checksums and debouncing, so only changed files are re-read.
-- Optional [Drizzle ORM](https://orm.drizzle.team) adapters: `sqlmd/drizzle` (SQLite) and `sqlmd/pg` ([PGlite](https://pglite.dev), Postgres in WebAssembly, with arrays, `jsonb`, extensions, indexes and live queries).
+- Optional [Drizzle ORM](https://orm.drizzle.team) adapters: `markdown-sql/drizzle` (SQLite) and `markdown-sql/pg` ([PGlite](https://pglite.dev), Postgres in WebAssembly, with arrays, `jsonb`, extensions, indexes and live queries).
 - No framework dependency. The main entry point never loads Drizzle or PGlite.
 
-> **Status:** version 1 is read-only. Writes and file migrations are on the [roadmap](#roadmap). sqlmd was published as `drizzle-md` before; see [Migrating from drizzle-md](#migrating-from-drizzle-md).
+> **Status:** version 1 is read-only. Writes and file migrations are on the [roadmap](#roadmap). MarkdownSQL was published as `drizzle-md` before; see [Migrating from drizzle-md](#migrating-from-drizzle-md).
 
 ## Install
 
 ```bash
-npm install sqlmd
+npm install markdown-sql
 ```
 
-Node.js 22 or later. The default SQLite driver is [better-sqlite3](https://github.com/WiseLibs/better-sqlite3), which installs a prebuilt binary. Node's built-in `node:sqlite` works too (`driver: 'node:sqlite'`, Node.js 22.16 or later). `drizzle-orm` and PGlite are optional peer dependencies, needed only for `sqlmd/drizzle` and `sqlmd/pg`.
+Node.js 22 or later. The default SQLite driver is [better-sqlite3](https://github.com/WiseLibs/better-sqlite3), which installs a prebuilt binary. Node's built-in `node:sqlite` works too (`driver: 'node:sqlite'`, Node.js 22.16 or later). `drizzle-orm` and PGlite are optional peer dependencies, needed only for `markdown-sql/drizzle` and `markdown-sql/pg`.
 
 ## Quick start
 
@@ -49,9 +49,9 @@ The first post.
 ```
 
 ```typescript
-import { sqlmd } from 'sqlmd';
+import { markdownSql } from 'markdown-sql';
 
-const md = await sqlmd({ root: 'content' });
+const md = await markdownSql({ root: 'content' });
 
 // Template values are bound as parameters, never pasted into the SQL.
 const popular = await md.sql`
@@ -97,7 +97,7 @@ Inferred columns are never required. Dates stay text exactly as written; declare
 Declare tables to pick the folders, rename the key or body column, or fix the column types:
 
 ```typescript
-const md = await sqlmd({
+const md = await markdownSql({
   root: 'content',
   tables: {
     articles: {
@@ -125,18 +125,18 @@ With `tables`, only the listed tables are loaded; a table without `columns` stil
 | `tables()` | Tables, folders and columns (name, type, role, required), including inferred ones. |
 | `diagnostics()`, `report()`, `reload()`, `watch()`, `subscribe()`, `settled()`, `close()` | The shared index lifecycle, described below. |
 
-## Drizzle ORM (`sqlmd/drizzle`)
+## Drizzle ORM (`markdown-sql/drizzle`)
 
-`sqlmd/drizzle` gives you a normal, read-only Drizzle database over the same index, so you define tables with Drizzle's own `sqliteTable` and get typed `select`, `where`, joins, aggregates, raw SQL and relational queries (`db.query`).
+`markdown-sql/drizzle` gives you a normal, read-only Drizzle database over the same index, so you define tables with Drizzle's own `sqliteTable` and get typed `select`, `where`, joins, aggregates, raw SQL and relational queries (`db.query`).
 
 ```bash
-npm install sqlmd drizzle-orm
+npm install markdown-sql drizzle-orm
 ```
 
 ```typescript
 import { eq, relations } from 'drizzle-orm';
 import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
-import { drizzleMd } from 'sqlmd/drizzle';
+import { drizzleMd } from 'markdown-sql/drizzle';
 
 export const authors = sqliteTable('authors', {
   id: text().primaryKey(), // file name without .md
@@ -217,12 +217,12 @@ Missing keys get the column's default (`.default()`, `.$defaultFn()`, or a SQL d
 This works the same in every entry point. A file is invalid when its YAML is broken, a required column (`required: true`, or `notNull` without a default in Drizzle) is missing, or a value doesn't fit its column. By default the first load throws an error listing every problem:
 
 ```typescript
-import { drizzleMd, findSqlmdError } from 'sqlmd/drizzle';
+import { drizzleMd, findMarkdownSqlError } from 'markdown-sql/drizzle';
 
 try {
   await drizzleMd({ root: 'content', schema });
 } catch (error) {
-  for (const d of findSqlmdError(error)?.diagnostics ?? []) {
+  for (const d of findMarkdownSqlError(error)?.diagnostics ?? []) {
     console.error(`${d.file}: ${d.message}`); // posts/bad.md: expected a number, got string "many"
   }
 }
@@ -246,7 +246,7 @@ md.report(); // { schemaHash, tables: [{ table, dir, rows, skipped, unknownKeys 
 The watcher is shared by every entry point.
 
 ```typescript
-const md = await sqlmd({ root: 'content', watch: true });
+const md = await markdownSql({ root: 'content', watch: true });
 // or later: md.watch({ debounceMs: 50 });
 
 const unsubscribe = md.subscribe((events) => {
@@ -264,21 +264,21 @@ The watcher uses `fs.watch` on each table folder. Events are debounced per file,
 
 ## Read-only
 
-Version 1 doesn't write files. `md.query()` and `md.sql` accept only `SELECT`, `WITH`, `VALUES` and `EXPLAIN`, and SQLite's `query_only` mode backs that up, so writes hidden in `WITH` fail too. Any `insert`, `update`, `delete`, DDL or `PRAGMA` sent through `md.db` in `sqlmd/drizzle` is rejected with a `SqlmdError` whose `code` is `READ_ONLY`. Drizzle wraps it in its own `DrizzleQueryError`, so check with `isSqlmdError(error, 'READ_ONLY')` or `findSqlmdError(error)`.
+Version 1 doesn't write files. `md.query()` and `md.sql` accept only `SELECT`, `WITH`, `VALUES` and `EXPLAIN`, and SQLite's `query_only` mode backs that up, so writes hidden in `WITH` fail too. Any `insert`, `update`, `delete`, DDL or `PRAGMA` sent through `md.db` in `markdown-sql/drizzle` is rejected with a `MarkdownSqlError` whose `code` is `READ_ONLY`. Drizzle wraps it in its own `DrizzleQueryError`, so check with `isMarkdownSqlError(error, 'READ_ONLY')` or `findMarkdownSqlError(error)`.
 
-## Postgres with PGlite (`sqlmd/pg`)
+## Postgres with PGlite (`markdown-sql/pg`)
 
 **Same function, different import.** Both Drizzle entry points export `drizzleMd` with the same options and the same result. The import path picks the engine:
 
 ```typescript
-import { drizzleMd } from 'sqlmd/drizzle'; // SQLite (better-sqlite3 or node:sqlite), sqliteTable schemas
-import { drizzleMd } from 'sqlmd/pg'; // PGlite (Postgres), pgTable schemas
+import { drizzleMd } from 'markdown-sql/drizzle'; // SQLite (better-sqlite3 or node:sqlite), sqliteTable schemas
+import { drizzleMd } from 'markdown-sql/pg'; // PGlite (Postgres), pgTable schemas
 ```
 
-`sqlmd/pg` builds the same index in [PGlite](https://pglite.dev), Postgres compiled to WebAssembly, so you can write `pgTable` schemas and use Postgres features: array operators, `jsonb`, full-text search, `pg_trgm` and GIN indexes. The watcher, diagnostics, `report()`, `reload()`, `subscribe()`, `settled()` and `close()` behave exactly as in the SQLite entry points.
+`markdown-sql/pg` builds the same index in [PGlite](https://pglite.dev), Postgres compiled to WebAssembly, so you can write `pgTable` schemas and use Postgres features: array operators, `jsonb`, full-text search, `pg_trgm` and GIN indexes. The watcher, diagnostics, `report()`, `reload()`, `subscribe()`, `settled()` and `close()` behave exactly as in the SQLite entry points.
 
 ```bash
-npm install sqlmd drizzle-orm @electric-sql/pglite
+npm install markdown-sql drizzle-orm @electric-sql/pglite
 # optional, for faster startup:
 npm install @electric-sql/pglite-prepopulatedfs
 ```
@@ -286,7 +286,7 @@ npm install @electric-sql/pglite-prepopulatedfs
 ```typescript
 import { arrayContains, eq } from 'drizzle-orm';
 import { boolean, jsonb, pgEnum, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
-import { drizzleMd } from 'sqlmd/pg';
+import { drizzleMd } from 'markdown-sql/pg';
 
 export const status = pgEnum('status', ['idea', 'published']);
 
@@ -317,7 +317,7 @@ await live.unsubscribe();
 await md.close();
 ```
 
-YAML lists fill array columns (`text().array()`, enum arrays, `integer().array()`, each item checked against the element type), and mappings or lists fill `json()` / `jsonb()` columns. `pgEnum` types are created for you. On the first load each folder is bulk-loaded with one `COPY … FROM '/dev/blob'`; if Postgres rejects a row (say a `varchar(40)` overflow), sqlmd retries file by file and reports only that file as a `sql-error`.
+YAML lists fill array columns (`text().array()`, enum arrays, `integer().array()`, each item checked against the element type), and mappings or lists fill `json()` / `jsonb()` columns. `pgEnum` types are created for you. On the first load each folder is bulk-loaded with one `COPY … FROM '/dev/blob'`; if Postgres rejects a row (say a `varchar(40)` overflow), MarkdownSQL retries file by file and reports only that file as a `sql-error`.
 
 Options on top of the SQLite ones:
 
@@ -367,9 +367,9 @@ const md = await drizzleMd({
 
 **Read-only.** Every statement from `md.db` runs in its own `READ ONLY` transaction, as a select-only `md_reader` role, and is always rolled back. Writes, DDL, `DO` blocks, `SET` and writes hidden in `WITH` are rejected with the same `READ_ONLY` error code as the SQLite entry points. `md.live()` first runs the query through that read-only path before PGlite's live extension sees it.
 
-**Trade-offs.** Pick `sqlmd/pg` when you want Postgres features or already use Postgres schemas; the SQLite entry points stay the lighter default.
+**Trade-offs.** Pick `markdown-sql/pg` when you want Postgres features or already use Postgres schemas; the SQLite entry points stay the lighter default.
 
-| | SQLite (`sqlmd`, `sqlmd/drizzle`) | PGlite (`sqlmd/pg`) |
+| | SQLite (`markdown-sql`, `markdown-sql/drizzle`) | PGlite (`markdown-sql/pg`) |
 | --- | --- | --- |
 | Memory | a few MB | about 570–700 MB RSS per instance (WebAssembly heap) |
 | Startup | milliseconds | about 0.5 s with the snapshot, 1.4 s without |
@@ -381,12 +381,12 @@ const md = await drizzleMd({
 
 - Read-only in version 1: edit the markdown files to change data.
 - One folder per table and one level deep: files in sub-folders are not read.
-- The plain `sqlmd` entry infers columns once, on the first load. A frontmatter key that first appears later is counted in `report()` as an unknown key until you restart or declare it in `columns`.
-- The plain `sqlmd` entry only offers SQLite; Postgres is available through `sqlmd/pg` with a Drizzle schema.
-- `sqlmd/drizzle` and `sqlmd/pg`: generated columns, `blob({ mode: 'buffer' })` columns and unique or foreign key constraints are not applied to the index. Foreign keys still work in joins and relations.
+- The plain `markdown-sql` entry infers columns once, on the first load. A frontmatter key that first appears later is counted in `report()` as an unknown key until you restart or declare it in `columns`.
+- The plain `markdown-sql` entry only offers SQLite; Postgres is available through `markdown-sql/pg` with a Drizzle schema.
+- `markdown-sql/drizzle` and `markdown-sql/pg`: generated columns, `blob({ mode: 'buffer' })` columns and unique or foreign key constraints are not applied to the index. Foreign keys still work in joins and relations.
 - The index lives in memory and is rebuilt on every start.
 - The watcher doesn't notice a table folder that is created after `watch()` starts.
-- `sqlmd/pg`: only tables and enums in the default `public` schema; foreign keys, checks and generated columns declared in `pgTable` are not applied yet (indexes and unique indexes are).
+- `markdown-sql/pg`: only tables and enums in the default `public` schema; foreign keys, checks and generated columns declared in `pgTable` are not applied yet (indexes and unique indexes are).
 
 ## Roadmap
 
@@ -399,19 +399,19 @@ See [docs/design.md](docs/design.md) for the architecture and the migrations pla
 
 ## Migrating from drizzle-md
 
-sqlmd is the new name of [`drizzle-md`](https://www.npmjs.com/package/drizzle-md) (0.1.0), because the core is querying markdown and Drizzle is now optional. The Drizzle API is unchanged apart from the import path and the error helper names:
+MarkdownSQL is the new name of [`drizzle-md`](https://www.npmjs.com/package/drizzle-md) (0.1.0), because the core is querying markdown and Drizzle is now optional. The Drizzle API is unchanged apart from the import path and the error helper names:
 
-| drizzle-md 0.1.0 | sqlmd 0.1.0 |
+| drizzle-md 0.1.0 | MarkdownSQL 0.1.0 |
 | --- | --- |
-| `npm install drizzle-md drizzle-orm` | `npm install sqlmd drizzle-orm` |
-| `import { drizzleMd } from 'drizzle-md'` | `import { drizzleMd } from 'sqlmd/drizzle'` |
-| `import { drizzleMd } from 'drizzle-md/pg'` | `import { drizzleMd } from 'sqlmd/pg'` |
-| `findDrizzleMdError`, `isDrizzleMdError` | `findSqlmdError`, `isSqlmdError` |
-| types `DrizzleMdError`, `DrizzleMdErrorCode`, `DrizzleMdIndex` | `SqlmdError`, `SqlmdErrorCode`, `SqlmdIndex` |
-| `error.name === 'DrizzleMdError'` | `error.name === 'SqlmdError'` |
-| error messages start with `drizzle-md` | they start with `sqlmd` |
+| `npm install drizzle-md drizzle-orm` | `npm install markdown-sql drizzle-orm` |
+| `import { drizzleMd } from 'drizzle-md'` | `import { drizzleMd } from 'markdown-sql/drizzle'` |
+| `import { drizzleMd } from 'drizzle-md/pg'` | `import { drizzleMd } from 'markdown-sql/pg'` |
+| `findDrizzleMdError`, `isDrizzleMdError` | `findMarkdownSqlError`, `isMarkdownSqlError` |
+| types `DrizzleMdError`, `DrizzleMdErrorCode`, `DrizzleMdIndex` | `MarkdownSqlError`, `MarkdownSqlErrorCode`, `MarkdownSqlIndex` |
+| `error.name === 'DrizzleMdError'` | `error.name === 'MarkdownSqlError'` |
+| error messages start with `drizzle-md` | they start with `MarkdownSQL` |
 
-Options, results, error codes (`READ_ONLY`, `VALIDATION`, `CONFIG`, `CLOSED`), diagnostics, the watcher and `sqlmd/pg`'s `live()`, `setup`, `prepopulated` and indexes behave exactly as before. `drizzle-orm` is now an optional peer dependency: install it yourself (you already do with drizzle-md). If you don't need Drizzle, the new `sqlmd` entry point queries the same folders with plain SQL.
+Options, results, error codes (`READ_ONLY`, `VALIDATION`, `CONFIG`, `CLOSED`), diagnostics, the watcher and `markdown-sql/pg`'s `live()`, `setup`, `prepopulated` and indexes behave exactly as before. `drizzle-orm` is now an optional peer dependency: install it yourself (you already do with drizzle-md). If you don't need Drizzle, the new `markdown-sql` entry point queries the same folders with plain SQL.
 
 ## Contributing
 

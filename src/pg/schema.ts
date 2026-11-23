@@ -8,7 +8,7 @@ import {
   PgTable,
 } from 'drizzle-orm/pg-core';
 import type { DrizzleTableModel, TableDialect } from '../drizzle/schema.js';
-import { createSqlmdError } from '../errors.js';
+import { createMarkdownSqlError } from '../errors.js';
 import { quoteIdentifier } from '../model.js';
 
 interface EnumType {
@@ -48,7 +48,7 @@ export const pgDialect: TableDialect<PgTable> = {
   checkTable: (schemaKey, table) => {
     const { schema } = getTableConfig(table);
     if (schema !== undefined && schema !== 'public') {
-      throw createSqlmdError(
+      throw createMarkdownSqlError(
         'CONFIG',
         `Table "${schemaKey}" is in the Postgres schema "${schema}". Only tables in the default schema are supported yet.`,
       );
@@ -67,7 +67,7 @@ export const enumDdl = (models: readonly DrizzleTableModel[]): readonly string[]
       continue;
     }
     if (enumType.schema !== undefined && enumType.schema !== 'public') {
-      throw createSqlmdError(
+      throw createMarkdownSqlError(
         'CONFIG',
         `Enum "${enumType.enumName}" is in the Postgres schema "${enumType.schema}". Only the default schema is supported yet.`,
       );

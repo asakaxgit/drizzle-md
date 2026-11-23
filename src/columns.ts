@@ -1,6 +1,6 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { extname, join } from 'node:path';
-import { createSqlmdError } from './errors.js';
+import { createMarkdownSqlError } from './errors.js';
 import { parseMarkdown } from './frontmatter.js';
 import type { JsonValue } from './json.js';
 import {
@@ -12,7 +12,7 @@ import {
 } from './model.js';
 
 /**
- * Column types of the Drizzle-free `sqlmd` entry point and how each is stored in SQLite:
+ * Column types of the Drizzle-free `markdown-sql` entry point and how each is stored in SQLite:
  *
  * - `text`: TEXT. Numbers and booleans in frontmatter are turned into text.
  * - `integer`: INTEGER; the value must be a whole number.
@@ -31,7 +31,7 @@ export interface ColumnDefinition {
   readonly values?: readonly string[];
 }
 
-export interface SqlmdTableOptions extends TableOptions {
+export interface MarkdownSqlTableOptions extends TableOptions {
   /**
    * Frontmatter columns, by frontmatter key. When left out, the columns are inferred from the
    * files on the first load; see the README for the rules.
@@ -59,8 +59,8 @@ const KINDS = {
 
 const noDefault: ColumnSpec['resolveDefault'] = async () => ({ found: false });
 
-/** The `ColumnSpec` for an sqlmd column type. */
-export const sqlmdColumnSpec = (definition: ColumnDefinition): ColumnSpec => {
+/** The `ColumnSpec` for a MarkdownSQL column type. */
+export const markdownSqlColumnSpec = (definition: ColumnDefinition): ColumnSpec => {
   const { type } = definition;
   return {
     kind: KINDS[type],
@@ -87,13 +87,13 @@ const definitionOf = (
 ): ColumnDefinition => {
   const definition = typeof column === 'string' ? { type: column } : column;
   if (!COLUMN_TYPES.includes(definition.type)) {
-    throw createSqlmdError(
+    throw createMarkdownSqlError(
       'CONFIG',
       `Table "${table}", column "${key}": unknown type "${definition.type}". Use one of ${COLUMN_TYPES.join(', ')}.`,
     );
   }
   if (definition.values !== undefined && definition.type !== 'text') {
-    throw createSqlmdError(
+    throw createMarkdownSqlError(
       'CONFIG',
       `Table "${table}", column "${key}": values is only allowed on text columns.`,
     );
@@ -176,14 +176,14 @@ export const inferColumns = async (
   );
 };
 
-const keySpec: ColumnSpec = sqlmdColumnSpec({ type: 'text', required: true });
-const bodySpec: ColumnSpec = sqlmdColumnSpec({ type: 'text', required: true });
+const keySpec: ColumnSpec = markdownSqlColumnSpec({ type: 'text', required: true });
+const bodySpec: ColumnSpec = markdownSqlColumnSpec({ type: 'text', required: true });
 
 /**
  * Builds the model of one table: the key column (TEXT primary key, from the file name), then the
  * frontmatter columns in order, then the body column unless `body` is `false`.
  */
-export const buildSqlmdModel = (
+export const buildMarkdownSqlModel = (
   table: string,
   options: TableOptions,
   columns: Readonly<Record<string, ColumnType | ColumnDefinition>>,
@@ -191,11 +191,14 @@ export const buildSqlmdModel = (
   const keyName = options.key ?? 'id';
   const bodyName = options.body ?? 'body';
   if (keyName === bodyName) {
-    throw createSqlmdError('CONFIG', `Table "${table}": key and body cannot both be "${keyName}".`);
+    throw createMarkdownSqlError(
+      'CONFIG',
+      `Table "${table}": key and body cannot both be "${keyName}".`,
+    );
   }
   const reserved = Object.keys(columns).find((key) => key === keyName || key === bodyName);
   if (reserved !== undefined) {
-    throw createSqlmdError(
+    throw createMarkdownSqlError(
       'CONFIG',
       `Table "${table}": column "${reserved}" is already the ${reserved === keyName ? 'key' : 'body'} column.`,
     );
@@ -208,7 +211,7 @@ export const buildSqlmdModel = (
         key,
         name: key,
         role: 'data',
-        spec: sqlmdColumnSpec(definitionOf(table, key, column)),
+        spec: markdownSqlColumnSpec(definitionOf(table, key, column)),
       }),
     ),
   ];

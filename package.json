@@ -1,5 +1,5 @@
 {
-  "name": "sqlmd",
+  "name": "markdown-sql",
   "version": "0.1.0",
   "description": "Query folders of markdown files with SQL: one folder per table, one file per row, frontmatter as columns. Optional Drizzle ORM adapters for SQLite and Postgres (PGlite).",
   "license": "Apache-2.0",

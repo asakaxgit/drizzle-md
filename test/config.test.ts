@@ -4,13 +4,13 @@ import { join } from 'node:path';
 import { sql } from 'drizzle-orm';
 import { blob, integer, primaryKey, real, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { afterEach, describe, expect, it } from 'vitest';
-import { type Diagnostic, drizzleMd, findSqlmdError } from '../src/drizzle/index.js';
+import { type Diagnostic, drizzleMd, findMarkdownSqlError } from '../src/drizzle/index.js';
 
 const roots: string[] = [];
 
 /** Writes `files` (path relative to a fresh temp root → content) and returns the root. */
 const tree = async (files: Readonly<Record<string, string>>): Promise<string> => {
-  const root = await mkdtemp(join(tmpdir(), 'sqlmd-config-'));
+  const root = await mkdtemp(join(tmpdir(), 'markdown-sql-config-'));
   roots.push(root);
   for (const [path, content] of Object.entries(files)) {
     await mkdir(join(root, path, '..'), { recursive: true });
@@ -28,7 +28,7 @@ const configError = async (run: () => Promise<object>): Promise<string | undefin
     () => undefined,
     (caught: Error) => caught,
   );
-  const found = findSqlmdError(error);
+  const found = findMarkdownSqlError(error);
   expect(found?.code).toBe('CONFIG');
   return found?.message;
 };
