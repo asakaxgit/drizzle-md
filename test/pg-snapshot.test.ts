@@ -91,6 +91,7 @@ describe('packageVersion', () => {
 });
 
 describe('drizzle-md/pg with a mismatched snapshot package', () => {
+  // PGlite's cold start without a snapshot can exceed Vitest's 5 s default under CI load.
   it('starts without the snapshot and reports a startup-warning', async () => {
     const diagnostics: Diagnostic[] = [];
     const md = await drizzleMd({
@@ -110,7 +111,7 @@ describe('drizzle-md/pg with a mismatched snapshot package', () => {
     } finally {
       await md.close();
     }
-  });
+  }, 20_000);
 
   it('fails with prepopulated: true', async () => {
     const error = await caught(
