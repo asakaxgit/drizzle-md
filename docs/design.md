@@ -14,10 +14,10 @@ Let people keep content as plain markdown files in git and still query it with D
 ## Architecture
 
 ```text
-markdown files ──read──▶ parseMarkdown ──▶ buildRow ──▶ in-memory SQLite ◀── sqlite-proxy ◀── Drizzle db
-      ▲                  (yaml AST →        (coerce +        (better-sqlite3      (read-only
-      │                   JsonValue)         defaults)        or node:sqlite)       guard)
-   fs.watch ──debounce──▶ queue ──▶ syncFile (checksum skip) ──▶ upsert / delete ──▶ subscribe()
+markdown files ──read──▶ parseMarkdown ──▶ buildRow ──▶ in-memory index ◀── sqlite-proxy / pg-proxy ◀── Drizzle db
+      ▲                  (yaml AST →        (coerce +       (SQLite: better-sqlite3      (read-only
+      │                   JsonValue)         defaults)       or node:sqlite; PGlite)       guard)
+   fs.watch ──debounce──▶ queue ──▶ syncFile (checksum skip) ──▶ IndexBackend.apply ──▶ subscribe() / live()
 ```
 
 | Module | Role |
@@ -25,10 +25,17 @@ markdown files ──read──▶ parseMarkdown ──▶ buildRow ──▶ in
 | `schema.ts` | Picks the `SQLiteTable`s out of the schema with `is()`, reads `getTableConfig` / `getTableColumns`, assigns key/body/data roles, generates `CREATE TABLE` (columns, SQL types, `NOT NULL`, primary keys) and the schema hash. |
 | `frontmatter.ts` | Splits the `---` block from the body and walks the YAML AST into `JsonValue`. YAML 1.2 core schema, so dates stay strings and nothing is typed `any`. |
 | `coerce.ts` | Converts each value for its column (`dataType`, SQL type, enum values), applies `.default()`, `.$defaultFn()` and SQL defaults, then calls the column's own `mapToDriverValue`, so storage matches what Drizzle expects when reading. |
-| `store.ts` | Per-table file state (checksum, key, diagnostics, unknown keys). Applies one file or a whole folder in a transaction. |
+| `store.ts` | Per-table file state (checksum, key, diagnostics, unknown keys). Reads and plans every file of a folder, then hands the whole batch to the backend (`IndexBackend.apply`: delete keys, insert rows) in one transaction. If the batch fails it retries file by file, so only the file the database rejects becomes a `sql-error`. |
 | `watcher.ts` | `fs.watch` per table folder, debounced per file. A missing file name in the event triggers a folder re-scan. |
-| `engine.ts` | The small synchronous driver surface: `exec`, `run`, `rows` (arrays, so joined columns with the same name survive). |
-| `drizzle-md.ts` | Wires it together and creates the Drizzle db with `drizzle-orm/sqlite-proxy`. |
+| `core.ts` | Shared by both entry points: first load, `onInvalid`, the update queue, watcher, `subscribe`, `settled`, `reload`, `report` and `close`. |
+| `read-only.ts` | The statement prefix check and the `READ_ONLY` / `CLOSED` errors. |
+| `engine.ts` | The small synchronous SQLite driver surface (`exec`, `run`, `rows` as arrays, so joined columns with the same name survive) and the SQLite `IndexBackend`. |
+| `drizzle-md.ts` | The SQLite entry point: creates the Drizzle db with `drizzle-orm/sqlite-proxy`. |
+| `pg/schema.ts` | The Postgres `TableDialect` (`pgTable`, array and enum column types) and `CREATE TYPE … AS ENUM`. |
+| `pg/backend.ts` | The PGlite `IndexBackend`: `COPY … FROM '/dev/blob'` for batches, `INSERT` for single files, SQL defaults evaluated as `::text`. |
+| `pg/drizzle-md.ts` | The `drizzle-md/pg` entry point: PGlite startup, `drizzle-orm/pg-proxy` with the read-only transaction wrapper, and `live()`. |
+
+`schema.ts` and `coerce.ts` take the dialect as a parameter (`TableDialect`, `RowContext`), so markdown parsing, coercion, defaults, validation and the watcher are one code path for SQLite and Postgres.
 
 ### Why sqlite-proxy
 
@@ -43,6 +50,45 @@ Two layers:
 
 All work is synchronous inside one event-loop turn, so toggling `query_only` can't interleave with a user query.
 
+### Postgres entry point (`drizzle-md/pg`)
+
+PGlite runs Postgres 18 in WebAssembly in the same process. It is an optional peer dependency, loaded only by `drizzle-md/pg`, so the default entry point never pulls it in.
+
+- **Startup.** `PGlite.create()` with the `@electric-sql/pglite-prepopulatedfs` snapshot when it is installed (about 0.45 s instead of about 1.4 s for initdb). Then `CREATE TYPE` for enums, `CREATE TABLE` per model, the user's `setup` SQL, and the `md_reader` role with `SELECT` on every table in `public`.
+- **Loading.** The first load of a folder is one transaction: `DELETE … WHERE key = ANY($1)` followed by one `COPY … FROM '/dev/blob'` in text format (5,000 rows in about 92 ms in the benchmark). Single-file updates from the watcher use a parameterised `INSERT`. Values come from each column's own `mapToDriverValue`, so `text[]` gets Postgres array literals and `jsonb` gets JSON text. SQL defaults are evaluated as `select (<default>)::text`, which keeps every type in Postgres' input format.
+- **Querying.** `drizzle-orm/pg-proxy` hands every statement to one callback. PGlite returns timestamps, dates and intervals as text there, as the official `drizzle-orm/pglite` driver does, so Drizzle's own mapping applies.
+- **Live queries.** `md.live(query, onResult)` runs the Drizzle query once through the read-only path, registers its SQL with PGlite's `live` extension (which watches the tables the plan touches), and re-runs the Drizzle query on every change so `onResult` gets typed, mapped rows. `close()` unsubscribes everything first.
+
+#### Read-only enforcement in Postgres
+
+`SET default_transaction_read_only = on` on the session is not enough: any statement can turn it off again. Instead each user statement runs as:
+
+```sql
+BEGIN;
+SET TRANSACTION READ ONLY;
+SET LOCAL ROLE md_reader;   -- SELECT only
+<statement>;
+ROLLBACK;                   -- always, even when it succeeded
+```
+
+1. The same prefix check as SQLite rejects anything that is not `SELECT`, `WITH`, `VALUES` or `EXPLAIN`, including `DO`, `SET`, `RESET` and DDL.
+2. The read-only transaction rejects writes that pass the prefix check, such as `WITH d AS (DELETE …) SELECT …`, `EXPLAIN ANALYZE DELETE …` or `set_config('transaction_read_only', 'off', …)` (SQLSTATE 25006 / 25001).
+3. The `md_reader` role limits what functions and tables a query can touch (42501). It is defence in depth, not a boundary: the session user is a superuser, so `set_config('role', …)` can switch back inside the transaction.
+4. The rollback discards everything a statement did, including session settings changed with `set_config(…, false)`.
+
+PGlite runs one transaction at a time, so drizzle-md's own writes (as the session user, in their own transaction) never interleave with a user query. All three SQLSTATEs map to the `READ_ONLY` error code.
+
+#### Trade-offs
+
+| | SQLite | PGlite |
+| --- | --- | --- |
+| Memory | a few MB | about 570–700 MB RSS per instance |
+| Startup | milliseconds | about 0.45 s with the snapshot, 1.4 s without |
+| Per-query overhead | microseconds | about 0.2 ms (transaction, role switch, rollback) |
+| Runtimes | Node.js | Node.js (tested); not Cloudflare Workers, whose 128 MB memory limit is far below PGlite's needs |
+
+DuckDB was considered and rejected for now: no official Drizzle dialect, point lookups about 20× slower than SQLite, and a 95 MB install.
+
 ### Watcher
 
 Ideas taken from Nuxt Content v3's dev mode: hash each file and skip unchanged ones, apply only the changed rows instead of rebuilding, and debounce bursts of events. Updates run one at a time through a queue; `settled()` waits for it. Invalid files during watch are reported, and their old row is removed so the index always mirrors the files.
@@ -51,6 +97,16 @@ Ideas taken from Nuxt Content v3's dev mode: hash each file and skip unchanged o
 
 - In: read-only queries, typed columns, defaults, validation (`throw` or `skip` with `onDiagnostic`), drift report, watcher, `better-sqlite3` and `node:sqlite` drivers.
 - Out: writes, file migrations, nested folders, an on-disk index, unique and foreign key constraints in the index, generated columns.
+
+## 0.2 scope: `drizzle-md/pg`
+
+- In: `pgTable` schemas, `pgEnum`, array columns from YAML lists, `json`/`jsonb` from mappings, COPY bulk load with per-file fallback, read-only transactions under `md_reader`, the prepopulated snapshot, `setup` SQL and PGlite extensions, `live()`.
+- Follow-ups:
+  - create the indexes declared in `pgTable` (GIN, expression and `opclass` indexes) instead of asking for `setup` SQL,
+  - generated columns (e.g. a stored `tsvector` for full-text search),
+  - tables and enums in other Postgres schemas (`pgSchema`),
+  - `live.incrementalQuery` for large result sets,
+  - an on-disk PGlite data directory as the index cache.
 
 ## Migrations plan
 
@@ -91,3 +147,5 @@ Type changes (e.g. text to timestamp) reuse `coerce.ts` to check every value bef
 - Should `better-sqlite3` become an optional peer dependency, with `node:sqlite` as the default once Node 22.16+ is the floor?
 - Frontmatter keys match Drizzle property names. Should SQL column names (e.g. `author_id`) also be accepted?
 - Should the watcher also watch `root` so table folders created later are picked up?
+- `drizzle-md/pg`: should indexes declared in `pgTable` be created automatically, replacing most uses of `setup`?
+- `drizzle-md/pg`: is loading the prepopulated snapshot whenever it is installed the right default, or should it be opt-in?

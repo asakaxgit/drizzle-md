@@ -9,6 +9,7 @@ drizzle-md reads the files into an in-memory SQLite database and gives you a nor
 - Joins across folders, e.g. posts and their authors.
 - File watcher with checksums and debouncing, so only changed files are re-read.
 - No framework dependency.
+- Optional Postgres entry point, `drizzle-md/pg`, backed by [PGlite](https://pglite.dev): `pgTable` schemas, `text[]` and `jsonb` columns, Postgres operators and extensions, and live queries.
 
 > **Status:** version 1 is read-only and not published to npm yet. Writes and file migrations are on the [roadmap](#roadmap).
 
@@ -178,6 +179,84 @@ The watcher uses `fs.watch` on each table folder. Events are debounced per file,
 
 Version 1 doesn't write files. Any `insert`, `update`, `delete`, DDL or `PRAGMA` sent through `md.db` is rejected with a `DrizzleMdError` whose `code` is `READ_ONLY`. Drizzle wraps it in its own `DrizzleQueryError`, so check with `isDrizzleMdError(error, 'READ_ONLY')` or `findDrizzleMdError(error)`.
 
+## Postgres with PGlite (`drizzle-md/pg`)
+
+`drizzle-md/pg` builds the same index in [PGlite](https://pglite.dev), Postgres compiled to WebAssembly, so you can write `pgTable` schemas and use Postgres features: array operators, `jsonb`, full-text search, `pg_trgm` and GIN indexes. The watcher, diagnostics, `report()`, `reload()`, `subscribe()`, `settled()` and `close()` behave exactly as in the SQLite entry point.
+
+```bash
+npm install drizzle-md drizzle-orm @electric-sql/pglite
+# optional, for faster startup:
+npm install @electric-sql/pglite-prepopulatedfs
+```
+
+```typescript
+import { arrayContains, eq } from 'drizzle-orm';
+import { boolean, jsonb, pgEnum, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
+import { drizzleMd } from 'drizzle-md/pg';
+
+export const status = pgEnum('status', ['idea', 'published']);
+
+export const posts = pgTable('posts', {
+  id: text().primaryKey(),
+  title: text().notNull(),
+  published: timestamp({ withTimezone: true }).notNull(),
+  draft: boolean().notNull().default(false),
+  tags: text().array().notNull().default([]), // a YAML list
+  meta: jsonb().$type<{ readingTime: number }>(), // a YAML mapping
+  status: status(),
+  body: text().notNull(),
+});
+
+const md = await drizzleMd({ root: 'content', schema: { status, posts }, watch: true });
+
+const tagged = await md.db
+  .select()
+  .from(posts)
+  .where(arrayContains(posts.tags, ['drizzle']));
+
+// Re-runs whenever a file in posts/ changes; rows are typed and mapped by Drizzle.
+const live = await md.live(
+  md.db.select({ id: posts.id }).from(posts).where(eq(posts.draft, false)),
+  (rows) => console.log(rows),
+);
+await live.unsubscribe();
+await md.close();
+```
+
+YAML lists fill array columns (`text().array()`, enum arrays, `integer().array()`, each item checked against the element type), and mappings or lists fill `json()` / `jsonb()` columns. `pgEnum` types are created for you. On the first load each folder is bulk-loaded with one `COPY … FROM '/dev/blob'`; if Postgres rejects a row (say a `varchar(40)` overflow), drizzle-md retries file by file and reports only that file as a `sql-error`.
+
+Options on top of the SQLite ones:
+
+| Option | Meaning |
+| --- | --- |
+| `prepopulated` | Start from the `@electric-sql/pglite-prepopulatedfs` snapshot instead of running initdb (about 0.5 s instead of 1.4 s). Default: use it when it is installed. `true` requires it, `false` skips it. Its version must match `@electric-sql/pglite`. |
+| `pglite` | Extra PGlite options, such as `extensions: { pg_trgm }` or `debug`. The data directory is always in memory. |
+| `setup` | SQL run once as the database owner after the tables are created and before the files load, e.g. `CREATE EXTENSION pg_trgm; CREATE INDEX ON posts USING gin (tags)`. |
+
+```typescript
+import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
+
+const md = await drizzleMd({
+  root: 'content',
+  schema: { posts },
+  pglite: { extensions: { pg_trgm } },
+  setup: `CREATE EXTENSION pg_trgm;
+    CREATE INDEX posts_title_trgm ON posts USING gin (title gin_trgm_ops);`,
+});
+```
+
+**Read-only.** Every statement from `md.db` runs in its own `READ ONLY` transaction, as a select-only `md_reader` role, and is always rolled back. Writes, DDL, `DO` blocks, `SET` and writes hidden in `WITH` are rejected with the same `READ_ONLY` error code as the SQLite entry point. `md.live()` first runs the query through that read-only path before PGlite's live extension sees it.
+
+**Trade-offs.** Pick `drizzle-md/pg` when you want Postgres features or already use Postgres schemas; the SQLite entry point stays the lighter default.
+
+| | SQLite (`drizzle-md`) | PGlite (`drizzle-md/pg`) |
+| --- | --- | --- |
+| Memory | a few MB | about 570–700 MB RSS per instance (WebAssembly heap) |
+| Startup | milliseconds | about 0.5 s with the snapshot, 1.4 s without |
+| Per-query overhead | microseconds | about 0.2 ms (transaction, role switch, rollback) |
+| Runtimes | Node.js | Node.js; not Cloudflare Workers (PGlite needs more memory and WebAssembly than Workers allow) |
+| Extras | | arrays, `jsonb`, enums, extensions, GIN indexes, live queries |
+
 ## Limitations
 
 - Read-only in version 1: edit the markdown files to change data.
@@ -185,6 +264,7 @@ Version 1 doesn't write files. Any `insert`, `update`, `delete`, DDL or `PRAGMA`
 - Generated columns, `blob({ mode: 'buffer' })` columns and unique or foreign key constraints are not applied to the index. Foreign keys still work in joins and relations.
 - The index lives in memory and is rebuilt on every start.
 - The watcher doesn't notice a table folder that is created after `watch()` starts.
+- `drizzle-md/pg`: only tables and enums in the default `public` schema; indexes and constraints declared in `pgTable` are not created (use `setup`); generated columns are not supported yet.
 
 ## Roadmap
 
