@@ -61,6 +61,8 @@ export interface OpenIndexOptions<TParam> {
   readonly backend: IndexBackend<TParam>;
   /** Closes the index database. Called by `close()` and when the first load fails. */
   readonly closeBackend: () => Promise<void>;
+  /** Runs once after the first load, e.g. to build indexes over the loaded rows. */
+  readonly afterLoad?: () => Promise<void>;
 }
 
 /**
@@ -68,7 +70,7 @@ export interface OpenIndexOptions<TParam> {
  * listeners and lifecycle. The entry points add the Drizzle `db` on top.
  */
 export const openIndex = async <TParam>(open: OpenIndexOptions<TParam>): Promise<IndexHandle> => {
-  const { options, models, backend, closeBackend } = open;
+  const { options, models, backend, closeBackend, afterLoad } = open;
   const userDiagnostic = options.onDiagnostic ?? (() => undefined);
   const store = createStore({
     backend,
@@ -80,6 +82,7 @@ export const openIndex = async <TParam>(open: OpenIndexOptions<TParam>): Promise
 
   try {
     await store.syncAll();
+    await afterLoad?.();
   } catch (error) {
     await closeBackend();
     throw error;

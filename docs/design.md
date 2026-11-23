@@ -32,6 +32,7 @@ markdown files ──read──▶ parseMarkdown ──▶ buildRow ──▶ in
 | `engine.ts` | The small synchronous SQLite driver surface (`exec`, `run`, `rows` as arrays, so joined columns with the same name survive) and the SQLite `IndexBackend`. |
 | `drizzle-md.ts` | The SQLite entry point: creates the Drizzle db with `drizzle-orm/sqlite-proxy`. |
 | `pg/schema.ts` | The Postgres `TableDialect` (`pgTable`, array and enum column types) and `CREATE TYPE … AS ENUM`. |
+| `pg/indexes.ts` | `CREATE INDEX` for the `index()` / `uniqueIndex()` declared in each `pgTable`. |
 | `pg/backend.ts` | The PGlite `IndexBackend`: `COPY … FROM '/dev/blob'` for batches, `INSERT` for single files, SQL defaults evaluated as `::text`. |
 | `pg/drizzle-md.ts` | The `drizzle-md/pg` entry point: PGlite startup, `drizzle-orm/pg-proxy` with the read-only transaction wrapper, and `live()`. |
 
@@ -55,8 +56,15 @@ All work is synchronous inside one event-loop turn, so toggling `query_only` can
 PGlite runs Postgres 18 in WebAssembly in the same process. It is an optional peer dependency, loaded only by `drizzle-md/pg`, so the default entry point never pulls it in.
 
 - **One name, two imports.** `drizzle-md` and `drizzle-md/pg` both export `drizzleMd` with the same options and result shape; the import path picks the engine, as Drizzle's own `drizzle()` does per driver.
-- **Startup.** `PGlite.create()` with the `@electric-sql/pglite-prepopulatedfs` snapshot when it is installed (about 0.45 s instead of about 1.4 s for initdb). The snapshot is a data directory made by one exact PGlite build, so drizzle-md reads both installed `package.json` versions first and uses it only when they are equal. By default a mismatch or a failed load falls back to initdb and reports a `startup-warning` through `onDiagnostic`; `prepopulated: true` turns both into a `CONFIG` error, and `false` skips the snapshot. Then `CREATE TYPE` for enums, `CREATE TABLE` per model, the user's `setup` SQL, and the `md_reader` role with `SELECT` on every table in `public`.
+- **Startup.** `PGlite.create()` with the `@electric-sql/pglite-prepopulatedfs` snapshot when it is installed (about 0.45 s instead of about 1.4 s for initdb). The snapshot is a data directory made by one exact PGlite build, so drizzle-md reads both installed `package.json` versions first and uses it only when they are equal. By default a mismatch or a failed load falls back to initdb and reports a `startup-warning` through `onDiagnostic`; `prepopulated: true` turns both into a `CONFIG` error, and `false` skips the snapshot. Then `CREATE TYPE` for enums, `CREATE TABLE` per model, the user's `setup` SQL, the `uniqueIndex()`es declared in the tables, and the `md_reader` role with `SELECT` on every table in `public`.
 - **Loading.** The first load of a folder is one transaction: `DELETE … WHERE key = ANY($1)` followed by one `COPY … FROM '/dev/blob'` in text format (5,000 rows in about 92 ms in the benchmark). Single-file updates from the watcher use a parameterised `INSERT`. Values come from each column's own `mapToDriverValue`, so `text[]` gets Postgres array literals and `jsonb` gets JSON text. SQL defaults are evaluated as `select (<default>)::text`, which keeps every type in Postgres' input format.
+- **Indexes.** `pg/indexes.ts` turns each `index()` / `uniqueIndex()` from `getTableConfig(table).indexes` into `CREATE INDEX`:
+  - **Columns:** with their operator class, `DESC` and non-default `NULLS FIRST/LAST`.
+  - **Expressions:** `sql` expressions are rendered like drizzle-kit does, with unqualified column names, and wrapped in parentheses.
+  - **Clauses:** `USING <method>`, `WITH (…)` and `WHERE …`.
+  - **Order of creation:** unique indexes are created before the load, so a duplicate surfaces through the store's per-file fallback as a `sql-error` instead of failing startup. All other indexes are built after the first COPY load, followed by `ANALYZE`.
+  - **Ignored:** `.concurrently()`, and `ONLY`, because the tables are never partitioned and Drizzle's `.using()` always sets it.
+  - **CONFIG errors:** bound parameters in an expression or `WHERE`, and an index Postgres rejects. Both name the index.
 - **Querying.** `drizzle-orm/pg-proxy` hands every statement to one callback. PGlite returns timestamps, dates and intervals as text there, as the official `drizzle-orm/pglite` driver does, so Drizzle's own mapping applies.
 - **Live queries.** `md.live(query, onResult)` runs the Drizzle query once through the read-only path, registers its SQL with PGlite's `live` extension (which watches the tables the plan touches), and re-runs the Drizzle query on every change so `onResult` gets typed, mapped rows. `close()` unsubscribes everything first.
 
@@ -103,9 +111,9 @@ Ideas taken from Nuxt Content v3's dev mode: hash each file and skip unchanged o
 
 ## 0.2 scope: `drizzle-md/pg`
 
-- In: `pgTable` schemas, `pgEnum`, array columns from YAML lists, `json`/`jsonb` from mappings, COPY bulk load with per-file fallback, read-only transactions under `md_reader`, the prepopulated snapshot, `setup` SQL and PGlite extensions, `live()`.
+- In: `pgTable` schemas, `pgEnum`, indexes and unique indexes declared in `pgTable`, array columns from YAML lists, `json`/`jsonb` from mappings, COPY bulk load with per-file fallback, read-only transactions under `md_reader`, the prepopulated snapshot, `setup` SQL and PGlite extensions, `live()`.
 - Follow-ups:
-  - create the indexes declared in `pgTable` (GIN, expression and `opclass` indexes) instead of asking for `setup` SQL,
+  - foreign keys and check constraints declared in `pgTable`,
   - generated columns (e.g. a stored `tsvector` for full-text search),
   - tables and enums in other Postgres schemas (`pgSchema`),
   - `live.incrementalQuery` for large result sets,
@@ -150,4 +158,3 @@ Type changes (e.g. text to timestamp) reuse `coerce.ts` to check every value bef
 - Should `better-sqlite3` become an optional peer dependency, with `node:sqlite` as the default once Node 22.16+ is the floor?
 - Frontmatter keys match Drizzle property names. Should SQL column names (e.g. `author_id`) also be accepted?
 - Should the watcher also watch `root` so table folders created later are picked up?
-- `drizzle-md/pg`: should indexes declared in `pgTable` be created automatically, replacing most uses of `setup`?

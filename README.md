@@ -238,17 +238,41 @@ Options on top of the SQLite ones:
 | --- | --- |
 | `prepopulated` | Start from the `@electric-sql/pglite-prepopulatedfs` snapshot instead of running initdb (about 0.5 s instead of 1.4 s). Default: use it when it is installed **and** its version is exactly the installed `@electric-sql/pglite` version; on a mismatch or a failed load PGlite starts normally and `onDiagnostic` gets a `startup-warning`. `true` requires it (a missing package, a mismatch or a failed load is a `CONFIG` error). `false` skips it. |
 | `pglite` | Extra PGlite options, such as `extensions: { pg_trgm }` or `debug`. The data directory is always in memory. |
-| `setup` | SQL run once as the database owner after the tables are created and before the files load, e.g. `CREATE EXTENSION pg_trgm; CREATE INDEX ON posts USING gin (tags)`. Trusted code only, see below. |
+| `setup` | SQL run once as the database owner after the tables are created and before the files load, e.g. `CREATE EXTENSION pg_trgm`. Trusted code only, see below. |
+
+**Indexes.** `index()` and `uniqueIndex()` declared in a `pgTable` are created for you:
+
+- **Columns:** single or multiple, with an operator class (`t.title.op('gin_trgm_ops')`), `.asc()` / `.desc()` and `.nullsFirst()` / `.nullsLast()`.
+- **Expressions:** `sql` expressions, e.g. ``sql`lower(${t.title})` ``.
+- **Methods:** any method set with `.using()`, such as gin, gist, brin or hash.
+- **Clauses:** `.where()` for partial indexes and `.with()` storage options.
+
+Unique indexes exist before the files load, so a file that repeats a unique value is reported as a `sql-error` and the other files still load. Other indexes are built once after the first load, which is faster than updating them row by row, followed by `ANALYZE`.
+
+There are a few limits:
+
+- `.concurrently()` is ignored.
+- Expressions and `.where()` must not contain bound values: write literals into the SQL text or use `sql.raw()`. Otherwise you get a `CONFIG` error.
+- An index Postgres cannot build, such as an operator class from an extension you didn't create in `setup`, fails startup with a `CONFIG` error that names the index.
 
 ```typescript
 import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
+import { index, pgTable, text } from 'drizzle-orm/pg-core';
+
+export const posts = pgTable(
+  'posts',
+  { id: text().primaryKey(), title: text().notNull(), tags: text().array().notNull().default([]) },
+  (t) => [
+    index('posts_tags_gin').using('gin', t.tags),
+    index('posts_title_trgm').using('gin', t.title.op('gin_trgm_ops')),
+  ],
+);
 
 const md = await drizzleMd({
   root: 'content',
   schema: { posts },
   pglite: { extensions: { pg_trgm } },
-  setup: `CREATE EXTENSION pg_trgm;
-    CREATE INDEX posts_title_trgm ON posts USING gin (title gin_trgm_ops);`,
+  setup: 'CREATE EXTENSION pg_trgm', // the extension must exist before its index is built
 });
 ```
 
@@ -264,7 +288,7 @@ const md = await drizzleMd({
 | Startup | milliseconds | about 0.5 s with the snapshot, 1.4 s without |
 | Per-query overhead | microseconds | about 0.2 ms (transaction, role switch, rollback) |
 | Runtimes | Node.js | Node.js; not Cloudflare Workers (PGlite needs more memory and WebAssembly than Workers allow) |
-| Extras | | arrays, `jsonb`, enums, extensions, GIN indexes, live queries |
+| Extras | | arrays, `jsonb`, enums, extensions, schema-declared GIN/GiST/expression indexes, live queries |
 
 ## Limitations
 
@@ -273,7 +297,7 @@ const md = await drizzleMd({
 - Generated columns, `blob({ mode: 'buffer' })` columns and unique or foreign key constraints are not applied to the index. Foreign keys still work in joins and relations.
 - The index lives in memory and is rebuilt on every start.
 - The watcher doesn't notice a table folder that is created after `watch()` starts.
-- `drizzle-md/pg`: only tables and enums in the default `public` schema; indexes and constraints declared in `pgTable` are not created (use `setup`); generated columns are not supported yet.
+- `drizzle-md/pg`: only tables and enums in the default `public` schema; foreign keys, checks and generated columns declared in `pgTable` are not applied yet (indexes and unique indexes are).
 
 ## Roadmap
 

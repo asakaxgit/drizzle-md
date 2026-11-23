@@ -4,10 +4,11 @@ import type { Query } from 'drizzle-orm';
 import type { PgTable } from 'drizzle-orm/pg-core';
 import { drizzle, type PgRemoteDatabase, type RemoteCallback } from 'drizzle-orm/pg-proxy';
 import { type BaseOptions, type DrizzleMdIndex, openIndex } from '../core.js';
-import { findDrizzleMdError } from '../errors.js';
+import { createDrizzleMdError, findDrizzleMdError } from '../errors.js';
 import { closedError, READ_STATEMENT, readOnlyError } from '../read-only.js';
 import { buildModels, type TablesOptions } from '../schema.js';
 import { createPgliteBackend } from './backend.js';
+import { type IndexStatement, indexDdl } from './indexes.js';
 import { enumDdl, pgDialect } from './schema.js';
 import { chooseSnapshot } from './snapshot.js';
 
@@ -37,8 +38,8 @@ export interface DrizzleMdPgOptions<TSchema extends Record<string, object>> exte
   readonly pglite?: PgliteOptions;
   /**
    * SQL run once as the database owner after the tables are created and before any file is
-   * loaded, e.g. `CREATE EXTENSION pg_trgm` or `CREATE INDEX … USING gin (tags)`. Tables it
-   * creates are readable by queries too.
+   * loaded, e.g. `CREATE EXTENSION pg_trgm`. Indexes declared in the `pgTable`s are created by
+   * drizzle-md itself, after this runs. Tables it creates are readable by queries too.
    *
    * **Trusted startup code.** It runs with full database rights, outside the read-only guard. Write
    * it yourself, like a migration; never build it from user input, request data, file contents
@@ -110,6 +111,7 @@ export const drizzleMd = async <TSchema extends Record<string, object>>(
 ): Promise<DrizzleMdPg<TSchema>> => {
   const models = buildModels(options.schema, options.tables, pgDialect);
   const enums = enumDdl(models);
+  const indexes = indexDdl(models);
   const snapshot = await chooseSnapshot(options.prepopulated);
   if (snapshot.warning !== undefined) {
     options.onDiagnostic?.({
@@ -126,12 +128,33 @@ export const drizzleMd = async <TSchema extends Record<string, object>>(
     extensions: { ...pgliteOptions.extensions, live: liveExtension },
   });
 
+  /** Runs `CREATE INDEX` statements one by one, so a failure names its index. */
+  const createIndexes = async (statements: readonly IndexStatement[]) => {
+    for (const statement of statements) {
+      try {
+        await client.exec(statement.sql);
+      } catch (error) {
+        throw createDrizzleMdError(
+          'CONFIG',
+          `Table "${statement.table}", index ${statement.label} could not be created: ${error instanceof Error ? error.message : String(error)}`,
+          error instanceof Error ? { cause: error } : {},
+        );
+      }
+    }
+  };
+
   try {
     await client.exec(
       [
         ...enums,
         ...models.map((model) => model.ddl),
         ...(options.setup === undefined ? [] : [options.setup]),
+      ].join(';\n'),
+    );
+    // Unique indexes exist before the files load, so a duplicate value is a per-file sql-error.
+    await createIndexes(indexes.filter((statement) => statement.unique));
+    await client.exec(
+      [
         `CREATE ROLE ${READER_ROLE} NOLOGIN`,
         `GRANT USAGE ON SCHEMA public TO ${READER_ROLE}`,
         `GRANT SELECT ON ALL TABLES IN SCHEMA public TO ${READER_ROLE}`,
@@ -147,6 +170,11 @@ export const drizzleMd = async <TSchema extends Record<string, object>>(
     options,
     models,
     backend: createPgliteBackend(client),
+    // Other indexes are built once over the loaded rows, which is faster than updating them per row.
+    afterLoad: async () => {
+      await createIndexes(indexes.filter((statement) => !statement.unique));
+      await client.exec('ANALYZE');
+    },
     closeBackend: async () => {
       for (const subscription of [...subscriptions]) {
         await subscription.unsubscribe();
