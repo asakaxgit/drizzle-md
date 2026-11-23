@@ -1,6 +1,6 @@
 {
   "name": "drizzle-md",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Drizzle ORM adapter that queries folders of markdown files as SQLite or Postgres (PGlite) tables.",
   "license": "Apache-2.0",
   "author": "Atsushi Sakashita <ats@saks.industries>",
@@ -25,6 +25,9 @@
   "type": "module",
   "engines": {
     "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "files": [
     "dist"
