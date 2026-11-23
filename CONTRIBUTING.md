@@ -9,6 +9,7 @@ npm run format     # apply Biome fixes and formatting
 npm run typecheck
 npm test           # vitest with coverage thresholds
 npm run build
+npm run check:dist # checks the built bundles, e.g. the node:sqlite import
 ```
 
 The `drizzle-md/pg` tests start several PGlite instances (about 0.5 s and 600 MB each, one at a time per test file), so `npm test` takes a few seconds longer than the SQLite tests alone.
