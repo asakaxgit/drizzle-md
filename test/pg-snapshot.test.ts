@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { Diagnostic } from '../src/index.js';
-import { drizzleMd, isDrizzleMdError } from '../src/pg/index.js';
+import type { Diagnostic } from '../src/drizzle/index.js';
+import { drizzleMd, isMarkdownSqlError } from '../src/pg/index.js';
 import { chooseSnapshot, PGLITE, PREPOPULATED, type SnapshotSource } from '../src/pg/snapshot.js';
 import { fixture } from './helpers.js';
 import { pgSchema, posts } from './pg-schema.js';
@@ -46,7 +46,7 @@ describe('chooseSnapshot', () => {
       dataDir: undefined,
     });
     const error = await caught(chooseSnapshot(true, source({ [PGLITE]: '0.5.17' })));
-    expect(isDrizzleMdError(error, 'CONFIG')).toBe(true);
+    expect(isMarkdownSqlError(error, 'CONFIG')).toBe(true);
     expect(error?.message).toContain('is not installed');
   });
 
@@ -55,7 +55,7 @@ describe('chooseSnapshot', () => {
     expect(choice.dataDir).toBeUndefined();
     expect(choice.warning).toContain('0.5.16 does not match @electric-sql/pglite 0.5.17');
     const error = await caught(chooseSnapshot(true, source(mismatched)));
-    expect(isDrizzleMdError(error, 'CONFIG')).toBe(true);
+    expect(isMarkdownSqlError(error, 'CONFIG')).toBe(true);
     expect(error?.message).toContain('does not match');
   });
 
@@ -74,7 +74,7 @@ describe('chooseSnapshot', () => {
       warning: expect.stringContaining('corrupt archive'),
     });
     const error = await caught(chooseSnapshot(true, broken));
-    expect(isDrizzleMdError(error, 'CONFIG')).toBe(true);
+    expect(isMarkdownSqlError(error, 'CONFIG')).toBe(true);
     expect(error?.cause).toBeInstanceOf(Error);
   });
 });
@@ -86,11 +86,11 @@ describe('packageVersion', () => {
     const pglite = await packageVersion(PGLITE);
     expect(pglite).toMatch(/^\d+\.\d+\.\d+/);
     expect(await packageVersion(PREPOPULATED)).toBe(pglite);
-    expect(await packageVersion('drizzle-md-no-such-package')).toBeUndefined();
+    expect(await packageVersion('markdown-sql-no-such-package')).toBeUndefined();
   });
 });
 
-describe('drizzle-md/pg with a mismatched snapshot package', () => {
+describe('markdown-sql/pg with a mismatched snapshot package', () => {
   // PGlite's cold start without a snapshot can exceed Vitest's 5 s default under CI load.
   it('starts without the snapshot and reports a startup-warning', async () => {
     const diagnostics: Diagnostic[] = [];
@@ -117,6 +117,6 @@ describe('drizzle-md/pg with a mismatched snapshot package', () => {
     const error = await caught(
       drizzleMd({ root: fixture('content'), schema: pgSchema, prepopulated: true }),
     );
-    expect(isDrizzleMdError(error, 'CONFIG')).toBe(true);
+    expect(isMarkdownSqlError(error, 'CONFIG')).toBe(true);
   });
 });

@@ -1,13 +1,15 @@
-import { type Column, is } from 'drizzle-orm';
+import { type Column, is, sql } from 'drizzle-orm';
 import {
   getTableConfig,
   PgArray,
+  PgDialect,
   PgEnumColumn,
   PgEnumObjectColumn,
   PgTable,
 } from 'drizzle-orm/pg-core';
-import { createDrizzleMdError } from '../errors.js';
-import { quoteIdentifier, type TableDialect, type TableModel } from '../schema.js';
+import type { DrizzleTableModel, TableDialect } from '../drizzle/schema.js';
+import { createMarkdownSqlError } from '../errors.js';
+import { quoteIdentifier } from '../model.js';
 
 interface EnumType {
   readonly enumName: string;
@@ -33,16 +35,20 @@ const columnType = (column: Column): string => {
   return enumType === undefined ? column.getSQLType() : quoteIdentifier(enumType.enumName);
 };
 
+const dialect = new PgDialect();
+
 export const pgDialect: TableDialect<PgTable> = {
   label: 'Postgres',
   isTable: (value): value is PgTable => is(value, PgTable),
   compositePrimaryKeys: (table) =>
     getTableConfig(table).primaryKeys.flatMap((pk) => pk.columns.map((column) => column.name)),
   columnType,
+  // Casting to text keeps every default in Postgres' own input format.
+  compileDefault: (expression) => dialect.sqlToQuery(sql`select (${expression})::text`),
   checkTable: (schemaKey, table) => {
     const { schema } = getTableConfig(table);
     if (schema !== undefined && schema !== 'public') {
-      throw createDrizzleMdError(
+      throw createMarkdownSqlError(
         'CONFIG',
         `Table "${schemaKey}" is in the Postgres schema "${schema}". Only tables in the default schema are supported yet.`,
       );
@@ -53,7 +59,7 @@ export const pgDialect: TableDialect<PgTable> = {
 const literal = (value: string): string => `'${value.replaceAll("'", "''")}'`;
 
 /** `CREATE TYPE … AS ENUM` for every `pgEnum` the tables use, before their `CREATE TABLE`. */
-export const enumDdl = (models: readonly TableModel[]): readonly string[] => {
+export const enumDdl = (models: readonly DrizzleTableModel[]): readonly string[] => {
   const enums = new Map<string, EnumType>();
   for (const column of models.flatMap((model) => model.columns)) {
     const enumType = enumOf(column.column);
@@ -61,7 +67,7 @@ export const enumDdl = (models: readonly TableModel[]): readonly string[] => {
       continue;
     }
     if (enumType.schema !== undefined && enumType.schema !== 'public') {
-      throw createDrizzleMdError(
+      throw createMarkdownSqlError(
         'CONFIG',
         `Enum "${enumType.enumName}" is in the Postgres schema "${enumType.schema}". Only the default schema is supported yet.`,
       );

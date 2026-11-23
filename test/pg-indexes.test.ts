@@ -5,10 +5,10 @@ import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
 import { sql } from 'drizzle-orm';
 import { boolean, index, pgTable, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { drizzleMd, isDrizzleMdError } from '../src/pg/index.js';
+import { buildModels } from '../src/drizzle/schema.js';
+import { drizzleMd, isMarkdownSqlError } from '../src/pg/index.js';
 import { indexDdl } from '../src/pg/indexes.js';
 import { pgDialect } from '../src/pg/schema.js';
-import { buildModels } from '../src/schema.js';
 
 const docs = pgTable(
   'docs',
@@ -36,7 +36,7 @@ const doc = (title: string, slug: string, extra = '') =>
   `---\ntitle: ${title}\nslug: ${slug}\ntags: [a]\npublished: 2026-11-01\n${extra}---\nBody\n`;
 
 const withDocs = async (files: Readonly<Record<string, string>>) => {
-  const root = await mkdtemp(join(tmpdir(), 'drizzle-md-idx-'));
+  const root = await mkdtemp(join(tmpdir(), 'markdown-sql-idx-'));
   await mkdir(join(root, 'docs'));
   for (const [name, content] of Object.entries(files)) {
     await writeFile(join(root, 'docs', name), content);
@@ -84,7 +84,7 @@ describe('indexDdl', () => {
   });
 });
 
-describe('drizzle-md/pg indexes', () => {
+describe('markdown-sql/pg indexes', () => {
   let md: Awaited<ReturnType<typeof drizzleMd<{ docs: typeof docs }>>>;
   let cleanup: () => Promise<void>;
 
@@ -144,7 +144,7 @@ describe('drizzle-md/pg indexes', () => {
   });
 });
 
-describe('drizzle-md/pg index errors', () => {
+describe('markdown-sql/pg index errors', () => {
   it('reports an index Postgres cannot build as a CONFIG error', async () => {
     const broken = pgTable('docs', { id: text().primaryKey(), title: text() }, (t) => [
       index('docs_trgm').using('gin', t.title.op('gin_trgm_ops')),
@@ -154,7 +154,7 @@ describe('drizzle-md/pg index errors', () => {
       const error = await caught(
         drizzleMd({ root, schema: { broken }, tables: { broken: { dir: 'docs' } } }),
       );
-      expect(isDrizzleMdError(error, 'CONFIG')).toBe(true);
+      expect(isMarkdownSqlError(error, 'CONFIG')).toBe(true);
       expect(error?.message).toContain('index "docs_trgm" could not be created');
     } finally {
       await cleanup();

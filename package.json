@@ -1,7 +1,7 @@
 {
-  "name": "drizzle-md",
+  "name": "markdown-sql",
   "version": "0.1.0",
-  "description": "Drizzle ORM adapter that queries folders of markdown files as SQLite or Postgres (PGlite) tables.",
+  "description": "Query folders of markdown files with SQL: one folder per table, one file per row, frontmatter as columns. Optional Drizzle ORM adapters for SQLite and Postgres (PGlite).",
   "license": "Apache-2.0",
   "author": "Atsushi Sakashita <ats@saks.industries>",
   "repository": {
@@ -13,12 +13,15 @@
     "url": "https://github.com/asakaxgit/drizzle-md/issues"
   },
   "keywords": [
-    "drizzle",
-    "drizzle-orm",
     "markdown",
     "frontmatter",
+    "sql",
     "sqlite",
+    "query",
     "content",
+    "database",
+    "drizzle",
+    "drizzle-orm",
     "postgres",
     "pglite"
   ],
@@ -44,6 +47,16 @@
       "require": {
         "types": "./dist/index.d.cts",
         "default": "./dist/index.cjs"
+      }
+    },
+    "./drizzle": {
+      "import": {
+        "types": "./dist/drizzle.d.ts",
+        "default": "./dist/drizzle.js"
+      },
+      "require": {
+        "types": "./dist/drizzle.d.cts",
+        "default": "./dist/drizzle.cjs"
       }
     },
     "./pg": {
@@ -96,6 +109,9 @@
       "optional": true
     },
     "@electric-sql/pglite-prepopulatedfs": {
+      "optional": true
+    },
+    "drizzle-orm": {
       "optional": true
     }
   }

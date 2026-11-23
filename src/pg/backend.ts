@@ -1,11 +1,9 @@
 import type { PGlite, Transaction } from '@electric-sql/pglite';
-import { sql } from 'drizzle-orm';
-import { PgDialect } from 'drizzle-orm/pg-core';
 import type { RowValues } from '../coerce.js';
-import { quoteIdentifier, type TableModel } from '../schema.js';
+import { quoteIdentifier, type TableModel } from '../model.js';
 import type { IndexBackend } from '../store.js';
 
-/** Values drizzle-md binds to a PGlite statement or writes to a COPY stream. */
+/** Values MarkdownSQL binds to a PGlite statement or writes to a COPY stream. */
 export type PgParam = string | number | boolean | null | Uint8Array;
 
 /** Narrows whatever a Drizzle pg column's `mapToDriverValue` returned to a bindable value. */
@@ -73,17 +71,14 @@ const byColumns = (rows: readonly RowValues<PgParam>[]): RowGroup[] => {
 };
 
 /**
- * The PGlite index. drizzle-md writes as the session's superuser in its own transaction; PGlite
+ * The PGlite index. MarkdownSQL writes as the session's superuser in its own transaction; PGlite
  * runs transactions one at a time, so writes never interleave with a user query.
  */
 export const createPgliteBackend = (client: PGlite): IndexBackend<PgParam> => {
-  const dialect = new PgDialect();
   return {
     toParam: toPgParam,
-    evaluate: async (expression) => {
-      // Casting to text keeps every default in Postgres' own input format.
-      const query = dialect.sqlToQuery(sql`select (${expression})::text`);
-      const result = await client.query<[string | null]>(query.sql, query.params, {
+    evaluate: async (query) => {
+      const result = await client.query<[string | null]>(query.sql, [...query.params], {
         rowMode: 'array',
       });
       return result.rows[0]?.[0] ?? null;

@@ -1,7 +1,8 @@
 import { is, SQL } from 'drizzle-orm';
 import { getTableConfig, IndexedColumn, PgDialect, PgTable } from 'drizzle-orm/pg-core';
-import { createDrizzleMdError } from '../errors.js';
-import { quoteIdentifier, type TableModel } from '../schema.js';
+import type { DrizzleTableModel } from '../drizzle/schema.js';
+import { createMarkdownSqlError } from '../errors.js';
+import { quoteIdentifier } from '../model.js';
 
 /** One `CREATE INDEX` statement for an index declared in a `pgTable`. */
 export interface IndexStatement {
@@ -20,7 +21,7 @@ type WithValue = string | number | boolean;
 const dialect = new PgDialect();
 
 const unsupported = (table: string, label: string, reason: string) =>
-  createDrizzleMdError('CONFIG', `Table "${table}", index ${label}: ${reason}`);
+  createMarkdownSqlError('CONFIG', `Table "${table}", index ${label}: ${reason}`);
 
 /** Renders SQL as drizzle-kit does for indexes: unqualified column names, no parameters. */
 const renderSql = (expression: SQL, table: string, label: string): string => {
@@ -84,7 +85,7 @@ const renderWith = (
  * `.using()` methods such as gin or gist, `.where()` and `.with()`. `.concurrently()` is ignored,
  * because the index is built before anyone can query it.
  */
-export const indexDdl = (models: readonly TableModel[]): readonly IndexStatement[] =>
+export const indexDdl = (models: readonly DrizzleTableModel[]): readonly IndexStatement[] =>
   models.flatMap((model) => {
     if (!is(model.table, PgTable)) {
       return [];

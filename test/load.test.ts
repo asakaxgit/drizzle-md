@@ -1,6 +1,6 @@
 import { count, desc, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { type DrizzleMd, drizzleMd } from '../src/index.js';
+import { type DrizzleMd, drizzleMd } from '../src/drizzle/index.js';
 import { fixture } from './helpers.js';
 import { authors, posts, schema } from './schema.js';
 

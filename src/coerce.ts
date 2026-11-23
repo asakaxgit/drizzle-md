@@ -1,13 +1,8 @@
-import { type Column, is, SQL } from 'drizzle-orm';
-import { PgArray } from 'drizzle-orm/pg-core';
 import type { SqlParam } from './engine.js';
 import type { Diagnostic, DiagnosticCode } from './errors.js';
 import type { MarkdownFile } from './frontmatter.js';
 import type { JsonValue } from './json.js';
-import type { ColumnModel, TableModel } from './schema.js';
-
-/** Values handed to a Drizzle column's `mapToDriverValue`. */
-type ColumnInput = JsonValue | Date | bigint | readonly ColumnInput[];
+import type { ColumnInput, ColumnModel, ColumnSpec, RowContext, TableModel } from './model.js';
 
 type Coerced =
   | { readonly ok: true; readonly value: ColumnInput }
@@ -28,14 +23,6 @@ export type RowOutcome<TParam> =
       readonly diagnostics: readonly Diagnostic[];
       readonly unknownKeys: readonly string[];
     };
-
-/** How the index database binds values and evaluates SQL defaults. */
-export interface RowContext<TParam> {
-  /** Narrows whatever a column's `mapToDriverValue` returned to a bindable value. */
-  readonly toParam: <T>(value: T) => TParam;
-  /** Evaluates a SQL default such as sql`(unixepoch())` and returns its value. */
-  readonly evaluate: (sql: SQL) => Promise<TParam>;
-}
 
 const ISO_DATE =
   /^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/;
@@ -63,7 +50,7 @@ const describe = (value: JsonValue): string => {
   return typeof value === 'object' ? 'a mapping' : `${typeof value} ${JSON.stringify(value)}`;
 };
 
-const coerceString = (column: Column, value: JsonValue): Coerced => {
+const coerceString = (column: ColumnSpec, value: JsonValue): Coerced => {
   if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') {
     return mismatch(`expected text, got ${describe(value)}`);
   }
@@ -77,11 +64,11 @@ const coerceString = (column: Column, value: JsonValue): Coerced => {
   return ok(text);
 };
 
-const coerceNumber = (column: Column, value: JsonValue): Coerced => {
+const coerceNumber = (column: ColumnSpec, value: JsonValue): Coerced => {
   if (typeof value !== 'number') {
     return mismatch(`expected a number, got ${describe(value)}`);
   }
-  if (INTEGER_TYPES.includes(column.getSQLType()) && !Number.isInteger(value)) {
+  if (INTEGER_TYPES.includes(column.sqlType) && !Number.isInteger(value)) {
     return mismatch(`expected an integer, got ${value}`);
   }
   return ok(value);
@@ -109,11 +96,12 @@ const coerceDate = (value: JsonValue): Coerced => {
     : ok(date);
 };
 
-const coerceArray = (column: Column, value: JsonValue): Coerced => {
+const coerceArray = (column: ColumnSpec, value: JsonValue): Coerced => {
   if (!Array.isArray(value)) {
     return mismatch(`expected a list, got ${describe(value)}`);
   }
-  if (!is(column, PgArray)) {
+  const { element } = column;
+  if (element === undefined) {
     return ok(value);
   }
   const items: ColumnInput[] = [];
@@ -121,7 +109,7 @@ const coerceArray = (column: Column, value: JsonValue): Coerced => {
     if (item === null) {
       return mismatch(`item ${index + 1}: null is not allowed in a list`);
     }
-    const coerced = coerceValue(column.baseColumn, item);
+    const coerced = coerceValue(element, item);
     if (!coerced.ok) {
       return { ...coerced, message: `item ${index + 1}: ${coerced.message}` };
     }
@@ -130,9 +118,9 @@ const coerceArray = (column: Column, value: JsonValue): Coerced => {
   return ok(items);
 };
 
-/** Converts one frontmatter value to what the Drizzle column expects. */
-export const coerceValue = (column: Column, value: JsonValue): Coerced => {
-  switch (column.dataType) {
+/** Converts one frontmatter value to what the column expects. */
+export const coerceValue = (column: ColumnSpec, value: JsonValue): Coerced => {
+  switch (column.kind) {
     case 'string':
       return coerceString(column, value);
     case 'number':
@@ -151,11 +139,11 @@ export const coerceValue = (column: Column, value: JsonValue): Coerced => {
     case 'custom':
       return ok(value);
     default:
-      return mismatch(`columns of type ${column.columnType} cannot be read from frontmatter`);
+      return mismatch(`columns of type ${column.typeName} cannot be read from frontmatter`);
   }
 };
 
-/** Narrows whatever a Drizzle column's `mapToDriverValue` returned to a bindable SQLite value. */
+/** Narrows whatever a column's driver mapping returned to a bindable SQLite value. */
 export const toSqlParam = <T>(value: T): SqlParam => {
   if (value === null || value === undefined) {
     return null;
@@ -173,9 +161,9 @@ export const toSqlParam = <T>(value: T): SqlParam => {
 };
 
 const keyValue = (model: ColumnModel, stem: string): Coerced => {
-  const { dataType } = model.column;
+  const { kind: dataType } = model.spec;
   if (dataType === 'string') {
-    return coerceString(model.column, stem);
+    return coerceString(model.spec, stem);
   }
   if ((dataType === 'number' || dataType === 'bigint') && INTEGER_TEXT.test(stem)) {
     return dataType === 'number' ? ok(Number(stem)) : ok(BigInt(stem));
@@ -183,26 +171,8 @@ const keyValue = (model: ColumnModel, stem: string): Coerced => {
   return {
     ok: false,
     code: 'invalid-key',
-    message: `file name "${stem}" is not a valid ${model.column.getSQLType()} key`,
+    message: `file name "${stem}" is not a valid ${model.spec.sqlType} key`,
   };
-};
-
-type DefaultValue<TParam> =
-  | { readonly found: true; readonly param: TParam }
-  | { readonly found: false };
-
-const defaultValue = async <TParam>(
-  column: Column,
-  context: RowContext<TParam>,
-): Promise<DefaultValue<TParam>> => {
-  const fromDefault = column.defaultFn === undefined ? column.default : column.defaultFn();
-  if (fromDefault === undefined) {
-    return { found: false };
-  }
-  if (is(fromDefault, SQL)) {
-    return { found: true, param: await context.evaluate(fromDefault) };
-  }
-  return { found: true, param: context.toParam(column.mapToDriverValue(fromDefault)) };
 };
 
 /** Turns one parsed markdown file into a row for `model`, or diagnostics explaining why not. */
@@ -225,7 +195,7 @@ export const buildRow = async <TParam>(
   const unknownKeys = Object.keys(file.data).filter((k) => !dataKeys.has(k));
 
   for (const columnModel of model.columns) {
-    const { column } = columnModel;
+    const { spec: column } = columnModel;
     let coerced: Coerced | undefined;
     if (columnModel.role === 'key') {
       coerced = keyValue(columnModel, stem);
@@ -242,7 +212,7 @@ export const buildRow = async <TParam>(
       }
     }
     if (coerced === undefined) {
-      const fallback = await defaultValue(column, context);
+      const fallback = await column.resolveDefault(context);
       if (fallback.found) {
         columns.push(columnModel.name);
         params.push(fallback.param);
@@ -262,7 +232,7 @@ export const buildRow = async <TParam>(
       report(coerced.code, columnModel.key, coerced.message);
       continue;
     }
-    const param = toParam(coerced.value === null ? null : column.mapToDriverValue(coerced.value));
+    const param = coerced.value === null ? toParam(null) : column.bind(coerced.value, toParam);
     if (columnModel.role === 'key') {
       key = param;
     }

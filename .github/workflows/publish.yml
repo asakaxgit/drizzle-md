@@ -26,11 +26,15 @@ jobs:
       - run: npx biome ci .
       - run: npm run typecheck
       - run: npm test
+      - run: npm run build
+      - run: npm run check:dist
 
       - name: Check tag matches package version
         run: |
           pkg="$(node -p 'require("./package.json").version')"
-          tag="${GITHUB_REF_NAME#v}"
+          # v0.1.0 already exists from the drizzle-md release, so markdown-sql- prefixed tags (markdown-sql-v0.1.0) work too.
+          tag="${GITHUB_REF_NAME#markdown-sql-}"
+          tag="${tag#v}"
           if [ "$pkg" != "$tag" ]; then
             echo "package.json is $pkg but the release tag is $tag" >&2
             exit 1

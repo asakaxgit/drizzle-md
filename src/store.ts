@@ -1,10 +1,10 @@
 import { createHash } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
-import { buildRow, type RowContext, type RowValues } from './coerce.js';
+import { buildRow, type RowValues } from './coerce.js';
 import type { Diagnostic } from './errors.js';
 import { parseMarkdown } from './frontmatter.js';
-import type { TableModel } from './schema.js';
+import type { RowContext, TableModel } from './model.js';
 
 export type ChangeType = 'add' | 'change' | 'unlink' | 'invalid';
 

@@ -1,4 +1,4 @@
-# Contributing to drizzle-md
+# Contributing to MarkdownSQL
 
 ## Setup
 
@@ -9,10 +9,14 @@ npm run format     # apply Biome fixes and formatting
 npm run typecheck
 npm test           # vitest with coverage thresholds
 npm run build
-npm run check:dist # checks the built bundles, e.g. the node:sqlite import
+npm run check:dist # checks the built bundles: the node:sqlite import, and no drizzle-orm or PGlite in the main entry
 ```
 
-The `drizzle-md/pg` tests start several PGlite instances (about 0.5 s and 600 MB each, one at a time per test file), so `npm test` takes a few seconds longer than the SQLite tests alone.
+The `markdown-sql/pg` tests start several PGlite instances (about 0.5 s and 600 MB each, one at a time per test file), so `npm test` takes a few seconds longer than the SQLite tests alone.
+
+## Entry points
+
+`src/index.ts` (`markdown-sql`) must not import `drizzle-orm`, `@electric-sql/pglite` or anything under `src/drizzle/` or `src/pg/`, directly or through a shared module: those are optional peer dependencies. Put Drizzle-specific code in `src/drizzle/` (shared by both Drizzle entry points) or `src/pg/`. `npm run check:dist` enforces this on the built files.
 
 Commits need a DCO sign-off (`git commit -s`) and an English message in the
 [Conventional Commits](https://www.conventionalcommits.org) style, e.g. `feat: add nested folders`.
@@ -46,4 +50,4 @@ Commits need a DCO sign-off (`git commit -s`) and an English message in the
 
 `interface` versus `type` is a review convention: Biome's `useConsistentTypeDefinitions` can only force one of the two, so it is off.
 
-There is one suppression in `src/`: the sqlite-proxy callback returns `rows[0]!` for `get` queries, because Drizzle reads "no row" from an undefined `rows` although its callback type says `any[]`. The `biome-ignore` comment there explains it.
+There is one suppression in `src/`: the sqlite-proxy callback in `src/drizzle/drizzle-md.ts` returns `rows[0]!` for `get` queries, because Drizzle reads "no row" from an undefined `rows` although its callback type says `any[]`. The `biome-ignore` comment there explains it.
