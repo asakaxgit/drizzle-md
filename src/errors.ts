@@ -5,9 +5,14 @@ export type DiagnosticCode =
   | 'invalid-key'
   | 'read-error'
   | 'sql-error'
-  | 'watch-error';
+  | 'watch-error'
+  | 'startup-warning';
 
-/** A problem found in one markdown file. The file is left out of the index. */
+/**
+ * A problem found in one markdown file; the file is left out of the index. `watch-error` and
+ * `startup-warning` are not about one file: their `table` and `file` may be empty, and they are
+ * only passed to `onDiagnostic`.
+ */
 export interface Diagnostic {
   readonly code: DiagnosticCode;
   /** Schema key of the table, as passed in `schema`. */

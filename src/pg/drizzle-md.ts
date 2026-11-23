@@ -4,11 +4,12 @@ import type { Query } from 'drizzle-orm';
 import type { PgTable } from 'drizzle-orm/pg-core';
 import { drizzle, type PgRemoteDatabase, type RemoteCallback } from 'drizzle-orm/pg-proxy';
 import { type BaseOptions, type DrizzleMdIndex, openIndex } from '../core.js';
-import { createDrizzleMdError, findDrizzleMdError } from '../errors.js';
+import { findDrizzleMdError } from '../errors.js';
 import { closedError, READ_STATEMENT, readOnlyError } from '../read-only.js';
 import { buildModels, type TablesOptions } from '../schema.js';
 import { createPgliteBackend } from './backend.js';
 import { enumDdl, pgDialect } from './schema.js';
+import { chooseSnapshot } from './snapshot.js';
 
 /** PGlite settings drizzle-md passes through. The data directory is always in memory. */
 export type PgliteOptions = Omit<PGliteOptions, 'dataDir' | 'loadDataDir'>;
@@ -23,8 +24,13 @@ export interface DrizzleMdPgOptions<TSchema extends Record<string, object>> exte
   readonly tables?: TablesOptions<TSchema, PgTable>;
   /**
    * Start PGlite from the `@electric-sql/pglite-prepopulatedfs` snapshot instead of running
-   * initdb, which cuts startup from about 1.4 s to about 0.5 s. `undefined` (default) uses it when
-   * the package is installed; `true` requires it; `false` never uses it.
+   * initdb, which cuts startup from about 1.4 s to about 0.5 s.
+   *
+   * - `undefined` (default): used when the package is installed and its version is exactly the
+   *   installed `@electric-sql/pglite` version. On a mismatch or a failed load PGlite starts
+   *   normally and `onDiagnostic` gets a `startup-warning`.
+   * - `true`: required; a missing package, a version mismatch or a failed load is a `CONFIG` error.
+   * - `false`: never used.
    */
   readonly prepopulated?: boolean;
   /** Extra PGlite options, such as `extensions` (e.g. `pg_trgm`) or `debug`. */
@@ -33,6 +39,10 @@ export interface DrizzleMdPgOptions<TSchema extends Record<string, object>> exte
    * SQL run once as the database owner after the tables are created and before any file is
    * loaded, e.g. `CREATE EXTENSION pg_trgm` or `CREATE INDEX … USING gin (tags)`. Tables it
    * creates are readable by queries too.
+   *
+   * **Trusted startup code.** It runs with full database rights, outside the read-only guard. Write
+   * it yourself, like a migration; never build it from user input, request data, file contents
+   * or anything else untrusted.
    */
   readonly setup?: string;
 }
@@ -81,30 +91,14 @@ const RAW_DATES = {
   [types.DATE]: (value: string) => value,
 };
 
-const loadSnapshot = async (prepopulated: boolean | undefined): Promise<Blob | undefined> => {
-  if (prepopulated === false) {
-    return undefined;
-  }
-  try {
-    const { dataDir } = await import('@electric-sql/pglite-prepopulatedfs');
-    return await dataDir();
-  } catch (error) {
-    if (prepopulated === true) {
-      throw createDrizzleMdError(
-        'CONFIG',
-        'prepopulated: true needs the @electric-sql/pglite-prepopulatedfs package, matching the @electric-sql/pglite version.',
-        error instanceof Error ? { cause: error } : {},
-      );
-    }
-    return undefined;
-  }
-};
-
 const toError = <T>(error: T): Error => (error instanceof Error ? error : new Error(String(error)));
 
 /**
  * Loads folders of markdown files into an in-memory PGlite (Postgres in WebAssembly) database and
  * returns a read-only Drizzle database over them.
+ *
+ * Same name and options as `drizzleMd` from `drizzle-md`: the import path picks the engine
+ * (`drizzle-md` for SQLite, `drizzle-md/pg` for PGlite).
  *
  * @example
  * import { drizzleMd } from 'drizzle-md/pg';
@@ -116,11 +110,19 @@ export const drizzleMd = async <TSchema extends Record<string, object>>(
 ): Promise<DrizzleMdPg<TSchema>> => {
   const models = buildModels(options.schema, options.tables, pgDialect);
   const enums = enumDdl(models);
-  const snapshot = await loadSnapshot(options.prepopulated);
+  const snapshot = await chooseSnapshot(options.prepopulated);
+  if (snapshot.warning !== undefined) {
+    options.onDiagnostic?.({
+      code: 'startup-warning',
+      table: '',
+      file: '',
+      message: snapshot.warning,
+    });
+  }
   const pgliteOptions = options.pglite ?? {};
   const client = await PGlite.create({
     ...pgliteOptions,
-    ...(snapshot === undefined ? {} : { loadDataDir: snapshot }),
+    ...(snapshot.dataDir === undefined ? {} : { loadDataDir: snapshot.dataDir }),
     extensions: { ...pgliteOptions.extensions, live: liveExtension },
   });
 

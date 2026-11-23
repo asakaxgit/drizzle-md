@@ -10,6 +10,8 @@ export default defineConfig({
   treeshake: true,
   // Keep `node:` in imports: `node:sqlite` only exists with the prefix.
   removeNodeProtocol: false,
+  // import.meta.url in the CommonJS build (used to find installed package versions).
+  shims: true,
   outExtension({ format }) {
     return { js: format === 'cjs' ? '.cjs' : '.js' };
   },
